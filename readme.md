@@ -1,7 +1,6 @@
 ![CI](https://github.com/dlepaux/docker-exporter/actions/workflows/ci.yml/badge.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
-![amd64 image](https://img.shields.io/badge/amd64-~91%20MB-blue?logo=docker&logoColor=white)
-![arm64 image](https://img.shields.io/badge/arm64-~113%20MB-blue?logo=docker&logoColor=white)
+![Image size](https://ghcr-badge.egpl.dev/dlepaux/docker-exporter/size)
 
 # docker-exporter
 
