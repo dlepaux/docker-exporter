@@ -1,0 +1,39 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "schedule:weekly", ":automergeMinor", ":automergeDigest"],
+  "labels": ["dependencies"],
+  "pinDigests": true,
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "description": "Major bumps require human review — breaking changes possible"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "cargo non-major",
+      "description": "Group routine cargo updates to keep PR noise down"
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "dockerfile non-major"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "minor", "digest"],
+      "groupName": "github-actions non-major",
+      "description": "Group action SHA bumps — pinDigests keeps these flowing"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": ["at any time"],
+    "automerge": true,
+    "labels": ["security", "cve"],
+    "prPriority": 10,
+    "description": "Bypass routine schedule and grouping — CVE patches ship within an hour of advisory publication, auto-merged on green CI"
+  },
+  "osvVulnerabilityAlerts": true
+}

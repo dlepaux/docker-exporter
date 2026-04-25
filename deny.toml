@@ -1,0 +1,37 @@
+# cargo-deny configuration
+#
+# Replaces cargo-audit on the CI gate. cargo-deny covers a broader supply-chain
+# surface: vulnerability advisories, license compliance, source allowlists,
+# banned-crate enforcement.
+#
+# See: https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+# RUSTSEC-2026-0009 — `time 0.3.45` denial-of-service via stack exhaustion.
+# Pulled in transitively by axum-test → cookie → time. axum-test is a
+# [dev-dependencies] crate used only by the integration test suite, so the
+# released `docker-exporter` binary and its container image do NOT link
+# against this version of `time`. Upstream fix lands when `cookie` bumps
+# past 0.18.1 and axum-test follows; until then the impact on production
+# users is zero. Re-verify on each axum-test release.
+#
+# RUSTSEC-2026-0097 — `rand 0.9.2` unsound when a custom logger calls
+# `rand::rng()`. Reaches us only via axum-test → rust-multipart-rfc7578_2
+# → rand. Same scoping argument as above: dev-dependency, never reaches
+# the released artefact.
+ignore = ["RUSTSEC-2026-0009", "RUSTSEC-2026-0097"]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+unused-allowed-license = "allow"

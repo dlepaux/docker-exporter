@@ -1,0 +1,32 @@
+[package]
+name = "docker-exporter"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Lightweight Prometheus exporter for Docker container metrics — built for ARM64 and cgroup v2"
+repository = "https://github.com/dlepaux/docker-exporter"
+
+[lib]
+name = "docker_exporter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "docker-exporter"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+bollard = "0.20"
+futures = "0.3"
+prometheus = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["timeout"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+axum-test = "17"
