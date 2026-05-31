@@ -34,8 +34,10 @@ LABEL org.opencontainers.image.version=$VERSION
 LABEL org.opencontainers.image.revision=$GIT_SHA
 LABEL org.opencontainers.image.created=$BUILD_DATE
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates wget \
+# Upgrade base packages (security patches) before installing runtime deps.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates wget \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system --gid 1001 exporter \
