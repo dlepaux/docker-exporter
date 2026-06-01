@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use bollard::Docker;
@@ -14,6 +15,7 @@ pub struct ContainerMetrics {
     pub id: String,
     pub image: String,
     pub state: String,
+    pub health: String,
     pub cpu_usage_seconds: f64,
     pub memory_usage_bytes: f64,
     pub memory_working_set_bytes: f64,
@@ -44,16 +46,21 @@ pub struct ScrapeResult {
     pub containers: Vec<ContainerMetrics>,
     pub scrape_duration_seconds: f64,
     pub docker_up: bool,
+    pub inspect_failures_total: u64,
 }
 
 /// Collect metrics for all running containers.
 ///
 /// This is called on each Prometheus scrape — no background polling.
 /// Stats are fetched concurrently for all containers with a per-container timeout.
-pub async fn collect(docker: &Docker, exclude: &[String]) -> ScrapeResult {
+pub async fn collect(
+    docker: &Docker,
+    exclude: &[String],
+    inspect_failures: &AtomicU64,
+) -> ScrapeResult {
     let start = Instant::now();
 
-    let containers = match list_and_collect(docker, exclude).await {
+    let containers = match list_and_collect(docker, exclude, inspect_failures).await {
         Ok(containers) => containers,
         Err(err) => {
             tracing::error!(%err, "failed to collect container metrics");
@@ -61,6 +68,7 @@ pub async fn collect(docker: &Docker, exclude: &[String]) -> ScrapeResult {
                 containers: vec![],
                 scrape_duration_seconds: start.elapsed().as_secs_f64(),
                 docker_up: false,
+                inspect_failures_total: inspect_failures.load(Ordering::Relaxed),
             };
         }
     };
@@ -69,12 +77,14 @@ pub async fn collect(docker: &Docker, exclude: &[String]) -> ScrapeResult {
         containers,
         scrape_duration_seconds: start.elapsed().as_secs_f64(),
         docker_up: true,
+        inspect_failures_total: inspect_failures.load(Ordering::Relaxed),
     }
 }
 
 async fn list_and_collect(
     docker: &Docker,
     exclude: &[String],
+    inspect_failures: &AtomicU64,
 ) -> Result<Vec<ContainerMetrics>, bollard::errors::Error> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -107,13 +117,21 @@ async fn list_and_collect(
             let id = container.id.clone().unwrap_or_default();
             let docker = docker.clone();
             async move {
-                let stats_result = tokio::time::timeout(
+                let stats_fut = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
                     fetch_stats(&docker, &id),
-                )
-                .await;
-
-                (container, stats_result)
+                );
+                // structured health only exists in the inspect response, not the list
+                // summary — so add a concurrent inspect call (own 5s timeout).
+                let inspect_fut = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    docker.inspect_container(
+                        &id,
+                        None::<bollard::query_parameters::InspectContainerOptions>,
+                    ),
+                );
+                let (stats_result, inspect_result) = tokio::join!(stats_fut, inspect_fut);
+                (container, stats_result, inspect_result)
             }
         })
         .collect();
@@ -122,7 +140,7 @@ async fn list_and_collect(
 
     let mut metrics = Vec::with_capacity(results.len());
 
-    for (container, stats_result) in results {
+    for (container, stats_result, inspect_result) in results {
         let id = container.id.clone().unwrap_or_default();
         let name = container
             .names
@@ -157,6 +175,29 @@ async fn list_and_collect(
             }
         };
 
+        // Health from inspect. HealthStatusEnum impls Display (like ContainerSummaryStateEnum
+        // used for `state` above) → .to_string() yields the API value; normalize it.
+        let health = match inspect_result {
+            Ok(Ok(inspect)) => {
+                let raw = inspect
+                    .state
+                    .and_then(|s| s.health)
+                    .and_then(|h| h.status)
+                    .map(|st| st.to_string());
+                normalize_health(raw)
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(container = %name, %err, reason = "error", "inspect failed");
+                inspect_failures.fetch_add(1, Ordering::Relaxed);
+                "none".to_owned()
+            }
+            Err(_) => {
+                tracing::warn!(container = %name, reason = "timeout", "inspect timed out (5s)");
+                inspect_failures.fetch_add(1, Ordering::Relaxed);
+                "none".to_owned()
+            }
+        };
+
         let (cpu, mem_usage, mem_working_set, mem_cache, mem_limit, network, bio_read, bio_write) =
             if let Some(ref stats) = stats {
                 (
@@ -178,6 +219,7 @@ async fn list_and_collect(
             id,
             image,
             state,
+            health,
             cpu_usage_seconds: cpu,
             memory_usage_bytes: mem_usage,
             memory_working_set_bytes: mem_working_set,
@@ -211,6 +253,21 @@ async fn fetch_stats(
                 message: "no stats returned".into(),
             })
         })
+}
+
+/// Normalize Docker's health status to one of: healthy | unhealthy | starting | none.
+/// Docker's inspect reports "healthy"/"unhealthy"/"starting"/"none"/"" (and absent when
+/// no healthcheck is configured). Anything not explicitly healthy/unhealthy/starting folds
+/// to "none" — a missing or unknown signal must never read as unhealthy.
+fn normalize_health(raw: Option<String>) -> String {
+    let s = raw.unwrap_or_default().trim().to_ascii_lowercase();
+    match s.as_str() {
+        "healthy" => "healthy",
+        "unhealthy" => "unhealthy",
+        "starting" => "starting",
+        _ => "none",
+    }
+    .to_owned()
 }
 
 /// CPU usage in cumulative seconds (converted from nanoseconds).
@@ -330,6 +387,24 @@ fn extract_blkio(stats: &ContainerStatsResponse, op: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use super::normalize_health;
+
+    #[test]
+    fn normalize_health_maps_known_states() {
+        assert_eq!(normalize_health(Some("healthy".into())), "healthy");
+        assert_eq!(normalize_health(Some("unhealthy".into())), "unhealthy");
+        assert_eq!(normalize_health(Some("starting".into())), "starting");
+    }
+
+    #[test]
+    fn normalize_health_folds_unknown_and_absent_to_none() {
+        assert_eq!(normalize_health(None), "none");
+        assert_eq!(normalize_health(Some("".into())), "none");
+        assert_eq!(normalize_health(Some("created".into())), "none");
+        assert_eq!(normalize_health(Some("HEALTHY".into())), "healthy"); // case-insensitive
+        assert_eq!(normalize_health(Some("  starting ".into())), "starting"); // trimmed
+    }
+
     #[test]
     fn cpu_nanoseconds_to_seconds() {
         let seconds = 1_500_000_000_f64 / 1_000_000_000.0;

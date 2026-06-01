@@ -34,6 +34,7 @@ use tower_http::timeout::TimeoutLayer;
 pub struct AppState {
     pub docker: Docker,
     pub exclude_containers: Vec<String>,
+    pub inspect_failures: std::sync::atomic::AtomicU64,
 }
 
 /// Per-request timeout for the HTTP server.
@@ -59,7 +60,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 
 async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let result = collector::collect(&state.docker, &state.exclude_containers).await;
+    let result = collector::collect(
+        &state.docker,
+        &state.exclude_containers,
+        &state.inspect_failures,
+    )
+    .await;
     let body = metrics::encode(&result);
 
     (
@@ -79,6 +85,7 @@ mod tests {
         Some(Arc::new(AppState {
             docker,
             exclude_containers: vec![],
+            inspect_failures: std::sync::atomic::AtomicU64::new(0),
         }))
     }
 

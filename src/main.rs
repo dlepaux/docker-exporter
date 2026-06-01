@@ -67,6 +67,7 @@ async fn main() {
     let state = Arc::new(AppState {
         docker,
         exclude_containers: config.exclude_containers,
+        inspect_failures: std::sync::atomic::AtomicU64::new(0),
     });
     let app = build_router(state);
 

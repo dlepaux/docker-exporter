@@ -223,6 +223,7 @@ mod tests {
             id: "abc123def456".into(),
             image: "myimage:latest".into(),
             state: "running".into(),
+            health: "healthy".into(),
             cpu_usage_seconds: 42.5,
             memory_usage_bytes: 104_857_600.0,
             memory_working_set_bytes: 83_886_080.0,
@@ -252,6 +253,7 @@ mod tests {
             containers: vec![sample_container()],
             scrape_duration_seconds: 0.05,
             docker_up: true,
+            inspect_failures_total: 0,
         };
 
         let output = encode(&result);
@@ -322,6 +324,7 @@ mod tests {
             containers: vec![],
             scrape_duration_seconds: 0.001,
             docker_up: false,
+            inspect_failures_total: 0,
         };
 
         let output = encode(&result);
@@ -343,6 +346,7 @@ mod tests {
             containers: vec![container],
             scrape_duration_seconds: 0.01,
             docker_up: true,
+            inspect_failures_total: 0,
         };
 
         let output = encode(&result);
@@ -358,6 +362,7 @@ mod tests {
             containers: vec![sample_container()],
             scrape_duration_seconds: 0.01,
             docker_up: true,
+            inspect_failures_total: 0,
         };
 
         let output = encode(&result);
