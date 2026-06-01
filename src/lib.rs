@@ -144,5 +144,13 @@ mod tests {
         let body = response.text();
         assert!(body.contains("docker_exporter_up 1"));
         assert!(body.contains("docker_exporter_scrape_duration_seconds"));
+        assert!(
+            body.contains("container_health_status"),
+            "health metric missing from scrape"
+        );
+        assert!(
+            body.contains("docker_exporter_inspect_failures_total"),
+            "inspect-failures counter missing"
+        );
     }
 }

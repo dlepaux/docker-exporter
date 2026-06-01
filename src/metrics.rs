@@ -31,6 +31,12 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
         vec![gauge_metric(&[], result.scrape_duration_seconds)],
     ));
 
+    families.push(counter_family(
+        "docker_exporter_inspect_failures_total",
+        "Total container inspect failures since exporter start",
+        vec![counter_metric(&[], result.inspect_failures_total as f64)],
+    ));
+
     if result.containers.is_empty() {
         return families;
     }
@@ -49,6 +55,7 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
     let mut blkio_metrics = Vec::new();
     // State & lifecycle
     let mut state_metrics = Vec::new();
+    let mut health_metrics = Vec::new();
     let mut start_time_metrics = Vec::new();
     let mut last_seen_metrics = Vec::new();
 
@@ -89,6 +96,12 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
         let mut state_labels = base_labels.clone();
         state_labels.push(label("state", &c.state));
         state_metrics.push(gauge_metric(&state_labels, state_value));
+
+        // Health — one series per container, status label = current state, value 1.
+        // c.health is a plain String (normalize_health already collapses unknown → "none").
+        let mut health_labels = base_labels.clone();
+        health_labels.push(label("status", &c.health));
+        health_metrics.push(gauge_metric(&health_labels, 1.0));
 
         // Lifecycle — gauges
         start_time_metrics.push(gauge_metric(&base_labels, c.started_at));
@@ -145,6 +158,11 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
         "container_state",
         "Container state (1 = running, 0 = other)",
         state_metrics,
+    ));
+    families.push(gauge_family(
+        "container_health_status",
+        "Container health status as reported by Docker (1 for current state)",
+        health_metrics,
     ));
     families.push(gauge_family(
         "container_start_time_seconds",
@@ -307,6 +325,26 @@ mod tests {
         );
         assert!(output.contains(r#"state="running""#), "missing state label");
 
+        // Health gauge — one series per container, status label = current state, value 1
+        assert!(
+            output.contains("# TYPE container_health_status gauge"),
+            "missing health gauge type"
+        );
+        assert!(
+            output.contains(r#"container_health_status{"#)
+                && output.contains(r#"status="healthy""#),
+            "missing health series with status label"
+        );
+        // Inspect-failure meta counter (always emitted, like docker_exporter_up)
+        assert!(
+            output.contains("# TYPE docker_exporter_inspect_failures_total counter"),
+            "missing inspect-failures counter type"
+        );
+        assert!(
+            output.contains("docker_exporter_inspect_failures_total 0"),
+            "missing inspect-failures value"
+        );
+
         // Exporter meta
         assert!(
             output.contains("docker_exporter_up 1"),
@@ -381,6 +419,8 @@ mod tests {
             "container_state",
             "container_start_time_seconds",
             "container_last_seen",
+            "container_health_status",
+            "docker_exporter_inspect_failures_total",
         ];
 
         for name in expected {
