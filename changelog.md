@@ -1,3 +1,16 @@
+# [1.1.0](https://github.com/dlepaux/docker-exporter/compare/v1.0.1...v1.1.0) (2026-06-02)
+
+
+### Bug Fixes
+
+* **test:** drop per-container assertion that fails on zero-container CI Docker ([1307be4](https://github.com/dlepaux/docker-exporter/commit/1307be4dae29945bf94ac63958a3397d40e13382))
+
+
+### Features
+
+* **collector:** collect container health via inspect + inspect-failure counter ([25e6f6f](https://github.com/dlepaux/docker-exporter/commit/25e6f6f3a6d3659adddae5b45864d2c325588a3a))
+* **metrics:** emit container_health_status gauge + inspect-failures counter ([698aa9c](https://github.com/dlepaux/docker-exporter/commit/698aa9cde29e4a3c8f9ade501334b5221e145843))
+
 ## [1.0.1](https://github.com/dlepaux/docker-exporter/compare/v1.0.0...v1.0.1) (2026-05-31)
 
 
