@@ -142,12 +142,14 @@ mod tests {
         response.assert_status_ok();
 
         let body = response.text();
+        // Only assert metrics that are emitted regardless of the live container set —
+        // CI's Docker daemon has zero containers, so per-container families
+        // (container_health_status, container_cpu_*, …) are legitimately absent here.
+        // container_health_status is covered by the metrics.rs encode test (synthetic
+        // container). docker_exporter_inspect_failures_total is a meta counter emitted
+        // before the empty-container early-return, so it's always present.
         assert!(body.contains("docker_exporter_up 1"));
         assert!(body.contains("docker_exporter_scrape_duration_seconds"));
-        assert!(
-            body.contains("container_health_status"),
-            "health metric missing from scrape"
-        );
         assert!(
             body.contains("docker_exporter_inspect_failures_total"),
             "inspect-failures counter missing"
