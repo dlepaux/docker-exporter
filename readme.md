@@ -18,7 +18,7 @@ Existing alternatives were dormant or amd64-only. So I wrote a Rust replacement:
 
 - Correct memory working set on cgroup v1 **and** v2 (`usage − inactive_file` on v2, `usage − cache` on v1)
 - Per-container CPU, memory, network, and disk I/O
-- Read-only Docker socket; runs as non-root (UID 1001) inside the container
+- Read-only Docker socket; runs as non-root (UID 65532) inside the container
 - On-demand collection — no background polling, stats fetched per scrape with a 5 s per-container timeout
 - Container exclusion filter via env var
 - `/health` and `/ready` endpoints (Docker `HEALTHCHECK` already wired in the image)
@@ -28,7 +28,7 @@ Existing alternatives were dormant or amd64-only. So I wrote a Rust replacement:
 - **Memory**: ~7–10 MiB at idle, ~10–20 MiB scraping ~30 containers.
 - **CPU**: idle between scrapes (no background loop). Per scrape, work scales with container count and Docker daemon latency — typically a small single-digit percentage on a Raspberry Pi 5.
 - **Scrape duration**: usually 1–3 s, dominated by the Docker daemon's `/containers/{id}/stats` endpoint. Per-container concurrency with a 5 s timeout caps individual stalls.
-- **Image**: ~91 MB on `linux/amd64`, ~113 MB on `linux/arm64` (debian-slim + dynamically-linked glibc). A musl + scratch/distroless variant is on the roadmap.
+- **Image**: ~9 MB (static musl binary on `distroless/static`, non-root). Same on `linux/amd64` and `linux/arm64`.
 
 ## cAdvisor — when to pick which
 
@@ -37,7 +37,7 @@ Existing alternatives were dormant or amd64-only. So I wrote a Rust replacement:
 | Dimension                          | docker-exporter        | cAdvisor                               |
 | ---------------------------------- | ---------------------- | -------------------------------------- |
 | Scope                              | Docker containers only | Containers + host + processes          |
-| Image size                         | ~91 MB amd64 / ~113 MB arm64 | ~250 MB                          |
+| Image size                         | ~9 MB (musl + distroless)    | ~250 MB                          |
 | RAM idle (small host, ~10 cont.)   | ~7–10 MiB              | ~80–150 MiB                            |
 | cgroup v2 working set on ARM64     | Correct                | Reports raw RSS — known issue          |
 | Privileged container required      | No (socket RO)         | Yes (mounts cgroup, proc, sys)         |
@@ -193,7 +193,7 @@ Scrape duration therefore tracks the Docker daemon's `/containers/{id}/stats` la
 **`docker_exporter_up 0` or the container restarts immediately.**
 The exporter calls `docker.ping()` at startup and exits non-zero if it fails. Three common causes:
 - Socket not mounted: confirm `-v /var/run/docker.sock:/var/run/docker.sock:ro` is on the run command and the path on the host actually exists (rootless Docker uses `$XDG_RUNTIME_DIR/docker.sock` instead).
-- Permission denied: the container runs as UID 1001. The Docker socket is normally owned by `root:docker`. Add the `docker` group's GID to the container (`--group-add $(getent group docker | cut -d: -f3)`) or run the exporter on a host where the socket GID matches.
+- Permission denied: the container runs as UID 65532 (distroless `nonroot`). The Docker socket is normally owned by `root:docker`. Add the `docker` group's GID to the container (`--group-add $(getent group docker | cut -d: -f3)`) or run the exporter on a host where the socket GID matches.
 - Daemon isn't listening on a Unix socket (e.g. only on TCP). bollard uses `connect_with_socket_defaults()` — Unix socket only at the moment.
 
 **A container doesn't appear in metrics.**

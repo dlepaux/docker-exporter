@@ -43,7 +43,8 @@ pub struct AppState {
 /// indefinitely (slowloris). Comfortably above the 5 s per-container stats
 /// timeout multiplied by the worst-case scrape duration we've measured
 /// (~3 s on 30+ containers), so legitimate scrapes never trip it. The
-/// Docker `HEALTHCHECK` (5 s wget) is also well within the budget.
+/// Docker `HEALTHCHECK` (native `--health` TCP probe, 2 s budget) doesn't
+/// touch this HTTP path at all, so it never interacts with this timeout.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[doc(hidden)]
