@@ -57,16 +57,16 @@ async fn main() {
         );
     }
 
-    if !config.exclude_containers.is_empty() {
+    if !config.exclude.is_empty() {
         tracing::info!(
-            exclude = ?config.exclude_containers,
+            exclude = ?config.exclude.patterns(),
             "container exclusion filter active"
         );
     }
 
     let state = Arc::new(AppState {
         docker,
-        exclude_containers: config.exclude_containers,
+        exclude: config.exclude,
         inspect_failures: std::sync::atomic::AtomicU64::new(0),
     });
     let app = build_router(state);

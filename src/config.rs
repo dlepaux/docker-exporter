@@ -2,11 +2,90 @@ use std::env;
 use std::fmt;
 use std::net::SocketAddr;
 
+use globset::{Glob, GlobSet, GlobSetBuilder};
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub listen_addr: SocketAddr,
     pub log_level: LogLevel,
-    pub exclude_containers: Vec<String>,
+    pub exclude: ExcludeMatcher,
+}
+
+/// Compiled container-exclusion matcher.
+///
+/// Built once at config load from the comma-separated `EXCLUDE_CONTAINERS`
+/// value. Each entry is compiled as a glob pattern against the container
+/// name. Glob semantics are whole-string anchored, so a literal entry with
+/// no metacharacters (`foo`) matches that name exactly and never a
+/// superstring (`foobar`) — preserving the original exact-match behaviour
+/// with zero migration. Metacharacters (`prefix-*`, `*-cache`) extend it.
+#[derive(Debug, Clone)]
+pub struct ExcludeMatcher {
+    /// `None` when no patterns were configured — matches nothing.
+    set: Option<GlobSet>,
+    /// Retained for logging/diagnostics (the original entries, trimmed).
+    patterns: Vec<String>,
+}
+
+impl ExcludeMatcher {
+    /// Parse a raw `EXCLUDE_CONTAINERS` value (comma-separated entries).
+    ///
+    /// Entries are trimmed and empty ones dropped (preserving the prior
+    /// parse semantics). A malformed glob is a hard error: it surfaces as
+    /// `ConfigError::InvalidValue` rather than being silently ignored.
+    pub fn parse(raw: &str) -> Result<Self, ConfigError> {
+        let patterns: Vec<String> = raw
+            .split(',')
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if patterns.is_empty() {
+            return Ok(Self {
+                set: None,
+                patterns,
+            });
+        }
+
+        let mut builder = GlobSetBuilder::new();
+        for pattern in &patterns {
+            let glob = Glob::new(pattern).map_err(|e| ConfigError::InvalidValue {
+                name: "EXCLUDE_CONTAINERS".into(),
+                value: pattern.clone(),
+                reason: e.to_string(),
+            })?;
+            builder.add(glob);
+        }
+        let set = builder.build().map_err(|e| ConfigError::InvalidValue {
+            name: "EXCLUDE_CONTAINERS".into(),
+            value: raw.into(),
+            reason: e.to_string(),
+        })?;
+
+        Ok(Self {
+            set: Some(set),
+            patterns,
+        })
+    }
+
+    /// Returns `true` if the container name matches any configured pattern.
+    /// Always `false` when no patterns were configured.
+    #[must_use]
+    pub fn is_match(&self, name: &str) -> bool {
+        self.set.as_ref().is_some_and(|set| set.is_match(name))
+    }
+
+    /// Returns `true` when no exclusion patterns are configured.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.set.is_none()
+    }
+
+    /// The configured patterns, trimmed (for logging/diagnostics).
+    #[must_use]
+    pub fn patterns(&self) -> &[String] {
+        &self.patterns
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,17 +151,12 @@ impl Config {
             Err(_) => LogLevel::Info,
         };
 
-        let exclude_containers = env::var("EXCLUDE_CONTAINERS")
-            .unwrap_or_default()
-            .split(',')
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let exclude = ExcludeMatcher::parse(&env::var("EXCLUDE_CONTAINERS").unwrap_or_default())?;
 
         Ok(Self {
             listen_addr,
             log_level,
-            exclude_containers,
+            exclude,
         })
     }
 }
@@ -162,5 +236,95 @@ mod tests {
             .filter(|s| !s.is_empty())
             .collect();
         assert!(result.is_empty());
+    }
+
+    // ── ExcludeMatcher: glob-aware container exclusion ──────────────────
+
+    #[test]
+    fn exclude_matcher_exact_match_still_works() {
+        let matcher = ExcludeMatcher::parse("foo").unwrap();
+        assert!(matcher.is_match("foo"));
+    }
+
+    #[test]
+    fn exclude_matcher_exact_does_not_over_match() {
+        // A literal entry must be whole-string anchored: `foo` excludes only
+        // `foo`, never a superstring. This is the backwards-compat guarantee.
+        let matcher = ExcludeMatcher::parse("foo").unwrap();
+        assert!(!matcher.is_match("foobar"));
+        assert!(!matcher.is_match("xfoo"));
+        assert!(!matcher.is_match("foo-bar"));
+    }
+
+    #[test]
+    fn exclude_matcher_single_glob() {
+        let matcher = ExcludeMatcher::parse("prefix-*").unwrap();
+        assert!(matcher.is_match("prefix-a"));
+        assert!(matcher.is_match("prefix-b"));
+        assert!(!matcher.is_match("other"));
+        // Anchored: a leading char before the literal prefix must not match.
+        assert!(!matcher.is_match("xprefix-a"));
+    }
+
+    #[test]
+    fn exclude_matcher_suffix_glob() {
+        let matcher = ExcludeMatcher::parse("*-cache").unwrap();
+        assert!(matcher.is_match("redis-cache"));
+        assert!(matcher.is_match("web-cache"));
+        assert!(!matcher.is_match("cache-redis"));
+    }
+
+    #[test]
+    fn exclude_matcher_multi_pattern_glob_groups() {
+        let matcher = ExcludeMatcher::parse("a-*,b-*").unwrap();
+        assert!(matcher.is_match("a-one"));
+        assert!(matcher.is_match("b-two"));
+        assert!(!matcher.is_match("c-three"));
+    }
+
+    #[test]
+    fn exclude_matcher_multi_pattern_mixed_exact_and_glob() {
+        // Mixed literal + glob entries in one EXCLUDE_CONTAINERS value.
+        let matcher = ExcludeMatcher::parse("web,cache-*").unwrap();
+        assert!(matcher.is_match("web")); // exact
+        assert!(matcher.is_match("cache-redis")); // glob
+        assert!(!matcher.is_match("website")); // exact must not over-match
+        assert!(!matcher.is_match("api")); // unrelated
+    }
+
+    #[test]
+    fn exclude_matcher_empty_excludes_nothing() {
+        let matcher = ExcludeMatcher::parse("").unwrap();
+        assert!(matcher.is_empty());
+        assert!(!matcher.is_match("anything"));
+        assert!(!matcher.is_match(""));
+    }
+
+    #[test]
+    fn exclude_matcher_whitespace_only_excludes_nothing() {
+        // Preserve existing trim+filter semantics: blank entries are dropped.
+        let matcher = ExcludeMatcher::parse(" , ,  ").unwrap();
+        assert!(matcher.is_empty());
+        assert!(!matcher.is_match("anything"));
+    }
+
+    #[test]
+    fn exclude_matcher_preserves_trim_semantics() {
+        let matcher = ExcludeMatcher::parse("cadvisor, prometheus , grafana").unwrap();
+        assert!(matcher.is_match("cadvisor"));
+        assert!(matcher.is_match("prometheus"));
+        assert!(matcher.is_match("grafana"));
+        assert!(!matcher.is_match("nginx"));
+    }
+
+    #[test]
+    fn exclude_matcher_invalid_glob_fails_loudly() {
+        // An unmatched `[` is a malformed glob — it MUST surface as a parse
+        // error at config load, never be silently dropped (silent-handler
+        // doctrine: a bad pattern fails loudly).
+        let err = ExcludeMatcher::parse("foo,bad[").unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidValue { ref name, .. } if name == "EXCLUDE_CONTAINERS")
+        );
     }
 }

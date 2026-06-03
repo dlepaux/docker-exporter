@@ -33,7 +33,7 @@ use tower_http::timeout::TimeoutLayer;
 #[doc(hidden)]
 pub struct AppState {
     pub docker: Docker,
-    pub exclude_containers: Vec<String>,
+    pub exclude: config::ExcludeMatcher,
     pub inspect_failures: std::sync::atomic::AtomicU64,
 }
 
@@ -60,12 +60,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 
 async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let result = collector::collect(
-        &state.docker,
-        &state.exclude_containers,
-        &state.inspect_failures,
-    )
-    .await;
+    let result = collector::collect(&state.docker, &state.exclude, &state.inspect_failures).await;
     let body = metrics::encode(&result);
 
     (
@@ -84,7 +79,7 @@ mod tests {
         let docker = Docker::connect_with_socket_defaults().ok()?;
         Some(Arc::new(AppState {
             docker,
-            exclude_containers: vec![],
+            exclude: config::ExcludeMatcher::parse("").expect("empty exclude is always valid"),
             inspect_failures: std::sync::atomic::AtomicU64::new(0),
         }))
     }

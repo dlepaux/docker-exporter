@@ -8,6 +8,8 @@ use bollard::query_parameters::{ListContainersOptionsBuilder, StatsOptionsBuilde
 use futures::future::join_all;
 use futures::stream::StreamExt;
 
+use crate::config::ExcludeMatcher;
+
 /// Collected metrics for a single container.
 #[derive(Debug, Clone)]
 pub struct ContainerMetrics {
@@ -55,7 +57,7 @@ pub struct ScrapeResult {
 /// Stats are fetched concurrently for all containers with a per-container timeout.
 pub async fn collect(
     docker: &Docker,
-    exclude: &[String],
+    exclude: &ExcludeMatcher,
     inspect_failures: &AtomicU64,
 ) -> ScrapeResult {
     let start = Instant::now();
@@ -83,7 +85,7 @@ pub async fn collect(
 
 async fn list_and_collect(
     docker: &Docker,
-    exclude: &[String],
+    exclude: &ExcludeMatcher,
     inspect_failures: &AtomicU64,
 ) -> Result<Vec<ContainerMetrics>, bollard::errors::Error> {
     let now = std::time::SystemTime::now()
@@ -111,7 +113,7 @@ async fn list_and_collect(
                 .and_then(|names| names.first())
                 .map(|n| n.strip_prefix('/').unwrap_or(n))
                 .unwrap_or("");
-            !exclude.iter().any(|e| e == name)
+            !exclude.is_match(name)
         })
         .map(|container| {
             let id = container.id.clone().unwrap_or_default();
@@ -388,6 +390,7 @@ fn extract_blkio(stats: &ContainerStatsResponse, op: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::normalize_health;
+    use crate::config::ExcludeMatcher;
 
     #[test]
     fn normalize_health_maps_known_states() {
@@ -430,27 +433,36 @@ mod tests {
         assert_eq!(stripped, "no-prefix");
     }
 
+    // Exercise the real filter predicate used in `list_and_collect`
+    // (`exclude.is_empty() || !exclude.is_match(name)`) through the
+    // production `ExcludeMatcher`, covering both exact and glob entries.
     #[test]
     fn exclusion_filter_logic() {
-        let exclude = ["cadvisor".to_owned(), "prometheus".to_owned()];
-        let names = vec!["nginx", "cadvisor", "grafana", "prometheus", "my-app"];
+        let exclude = ExcludeMatcher::parse("cadvisor,prometheus,debug-*").unwrap();
+        let names = vec![
+            "nginx",
+            "cadvisor",
+            "grafana",
+            "prometheus",
+            "debug-sidecar",
+        ];
 
         let kept: Vec<_> = names
             .into_iter()
-            .filter(|name| !exclude.iter().any(|e| e == name))
+            .filter(|name| exclude.is_empty() || !exclude.is_match(name))
             .collect();
 
-        assert_eq!(kept, vec!["nginx", "grafana", "my-app"]);
+        assert_eq!(kept, vec!["nginx", "grafana"]);
     }
 
     #[test]
     fn exclusion_filter_empty_excludes_nothing() {
-        let exclude: Vec<String> = vec![];
+        let exclude = ExcludeMatcher::parse("").unwrap();
         let names = vec!["nginx", "cadvisor"];
 
         let kept: Vec<_> = names
             .into_iter()
-            .filter(|name| exclude.is_empty() || !exclude.iter().any(|e| e == name))
+            .filter(|name| exclude.is_empty() || !exclude.is_match(name))
             .collect();
 
         assert_eq!(kept, vec!["nginx", "cadvisor"]);

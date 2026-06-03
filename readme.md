@@ -80,8 +80,14 @@ All configuration is via environment variables. All are optional.
 | -------------------- | -------------- | -------------------------------------------------------- |
 | `LISTEN_ADDR`        | `0.0.0.0:9713` | Address and port to bind the HTTP server                 |
 | `LOG_LEVEL`          | `info`         | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
-| `EXCLUDE_CONTAINERS` | _(empty)_      | Comma-separated container names to exclude from metrics  |
+| `EXCLUDE_CONTAINERS` | _(empty)_      | Comma-separated container name patterns to exclude        |
 | `RUST_LOG`           | _(unset)_      | Standard `tracing` filter — overrides `LOG_LEVEL` if set |
+
+`EXCLUDE_CONTAINERS` matches against the container **name** (without the leading `/`). Each comma-separated entry is a [glob pattern](https://docs.rs/globset): `*` matches any run of characters, `?` a single character, `[abc]` a character class. Patterns are whole-name anchored, so `cache-*` excludes `cache-redis` but not `app-cache`. A plain name with no wildcards (`prometheus`) is an exact match — existing exact values keep working unchanged, no migration needed. A malformed pattern fails loudly at startup rather than being silently ignored.
+
+```
+EXCLUDE_CONTAINERS=prometheus,cadvisor,debug-*,*-sidecar
+```
 
 ## Endpoints
 
@@ -191,7 +197,7 @@ The exporter calls `docker.ping()` at startup and exits non-zero if it fails. Th
 - Daemon isn't listening on a Unix socket (e.g. only on TCP). bollard uses `connect_with_socket_defaults()` — Unix socket only at the moment.
 
 **A container doesn't appear in metrics.**
-- Check `EXCLUDE_CONTAINERS` — the match is on the container name (without the leading `/`), exact match, comma-separated.
+- Check `EXCLUDE_CONTAINERS` — the match is on the container name (without the leading `/`), comma-separated, glob-aware (a wildcard pattern like `cache-*` may be catching it; plain names match exactly).
 - The container was created after the last scrape and Prometheus hasn't pulled yet — wait one scrape interval.
 - Stopped containers *do* appear, with `container_state{...} 0` and zero stats. If you see nothing at all for a container, the Docker daemon isn't returning it from `/containers/json?all=true`.
 
