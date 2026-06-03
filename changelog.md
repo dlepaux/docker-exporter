@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/dlepaux/docker-exporter/compare/v1.2.0...v1.3.0) (2026-06-03)
+
+
+### Features
+
+* ship musl static binary on distroless + native --health check ([10ffcd2](https://github.com/dlepaux/docker-exporter/commit/10ffcd24a0a7f0f558e826919991e05dae5172d8))
+
 # [1.2.0](https://github.com/dlepaux/docker-exporter/compare/v1.1.0...v1.2.0) (2026-06-03)
 
 
