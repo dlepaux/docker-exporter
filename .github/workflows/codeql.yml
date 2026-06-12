@@ -1,0 +1,42 @@
+name: codeql
+
+# Informational SAST (NOT a hard merge gate). CodeQL catches a different bug
+# class than clippy + cargo-deny — taint-flow, deserialization, etc. Rust
+# build-less scanning went GA Oct 2025 (CodeQL 2.23.3). Results land in the
+# repo Security tab; fail-soft by design.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, off-peak Monday 03:27 UTC (avoids the :00 cron stampede).
+    - cron: "27 3 * * 1"
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: analyze (rust)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"
