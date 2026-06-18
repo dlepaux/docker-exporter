@@ -95,6 +95,11 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
         let state_value = if c.state == "running" { 1.0 } else { 0.0 };
         let mut state_labels = base_labels.clone();
         state_labels.push(label("state", &c.state));
+        // restart_policy lives ONLY on container_state (not base_labels): it's the
+        // single metric the ContainerStopped alert selects on, so other families
+        // keep their cardinality. Lets alerting exclude one-shots (restart:no) by
+        // label instead of a hand-curated name blacklist.
+        state_labels.push(label("restart_policy", &c.restart_policy));
         state_metrics.push(gauge_metric(&state_labels, state_value));
 
         // Health — one series per container, status label = current state, value 1.
@@ -242,6 +247,7 @@ mod tests {
             image: "myimage:latest".into(),
             state: "running".into(),
             health: "healthy".into(),
+            restart_policy: "always".into(),
             cpu_usage_seconds: 42.5,
             memory_usage_bytes: 104_857_600.0,
             memory_working_set_bytes: 83_886_080.0,

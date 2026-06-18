@@ -18,6 +18,7 @@ pub struct ContainerMetrics {
     pub image: String,
     pub state: String,
     pub health: String,
+    pub restart_policy: String,
     pub cpu_usage_seconds: f64,
     pub memory_usage_bytes: f64,
     pub memory_working_set_bytes: f64,
@@ -179,24 +180,35 @@ async fn list_and_collect(
 
         // Health from inspect. HealthStatusEnum impls Display (like ContainerSummaryStateEnum
         // used for `state` above) → .to_string() yields the API value; normalize it.
-        let health = match inspect_result {
+        // Health + restart policy both come from the SAME inspect response (two
+        // independent fields → partial moves are fine). restart_policy lets the
+        // alerting layer exclude intentional one-shots (restart:no) by label
+        // instead of a hand-curated name blacklist. On inspect FAILURE → "unknown"
+        // (never "no"): an unknown policy must still alert (fail-safe), never
+        // silently exempt a real crashed service.
+        let (health, restart_policy) = match inspect_result {
             Ok(Ok(inspect)) => {
                 let raw = inspect
                     .state
                     .and_then(|s| s.health)
                     .and_then(|h| h.status)
                     .map(|st| st.to_string());
-                normalize_health(raw)
+                let policy = inspect
+                    .host_config
+                    .and_then(|h| h.restart_policy)
+                    .and_then(|r| r.name)
+                    .map(|n| n.to_string());
+                (normalize_health(raw), normalize_restart_policy(policy))
             }
             Ok(Err(err)) => {
                 tracing::warn!(container = %name, %err, reason = "error", "inspect failed");
                 inspect_failures.fetch_add(1, Ordering::Relaxed);
-                "none".to_owned()
+                ("none".to_owned(), "unknown".to_owned())
             }
             Err(_) => {
                 tracing::warn!(container = %name, reason = "timeout", "inspect timed out (5s)");
                 inspect_failures.fetch_add(1, Ordering::Relaxed);
-                "none".to_owned()
+                ("none".to_owned(), "unknown".to_owned())
             }
         };
 
@@ -222,6 +234,7 @@ async fn list_and_collect(
             image,
             state,
             health,
+            restart_policy,
             cpu_usage_seconds: cpu,
             memory_usage_bytes: mem_usage,
             memory_working_set_bytes: mem_working_set,
@@ -261,6 +274,18 @@ async fn fetch_stats(
 /// Docker's inspect reports "healthy"/"unhealthy"/"starting"/"none"/"" (and absent when
 /// no healthcheck is configured). Anything not explicitly healthy/unhealthy/starting folds
 /// to "none" — a missing or unknown signal must never read as unhealthy.
+// Docker reports a `--restart no` / unset policy as an empty name (older daemons)
+// or "no" — both mean a one-shot / batch container. Fold them to "no" so the
+// alerting layer can exclude one-shots by label. Any explicit policy (always,
+// on-failure, unless-stopped) passes through verbatim. Inspect FAILURE is handled
+// by the caller (→ "unknown"), never routed here, so a crash never reads as "no".
+fn normalize_restart_policy(name: Option<String>) -> String {
+    match name {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => "no".to_owned(),
+    }
+}
+
 fn normalize_health(raw: Option<String>) -> String {
     let s = raw.unwrap_or_default().trim().to_ascii_lowercase();
     match s.as_str() {
@@ -389,7 +414,7 @@ fn extract_blkio(stats: &ContainerStatsResponse, op: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_health;
+    use super::{normalize_health, normalize_restart_policy};
     use crate::config::ExcludeMatcher;
 
     #[test]
@@ -406,6 +431,25 @@ mod tests {
         assert_eq!(normalize_health(Some("created".into())), "none");
         assert_eq!(normalize_health(Some("HEALTHY".into())), "healthy"); // case-insensitive
         assert_eq!(normalize_health(Some("  starting ".into())), "starting"); // trimmed
+    }
+
+    #[test]
+    fn restart_policy_empty_or_none_folds_to_no() {
+        // Docker's unset / `--restart no` policy == a one-shot/batch container.
+        assert_eq!(normalize_restart_policy(None), "no");
+        assert_eq!(normalize_restart_policy(Some("".into())), "no");
+        assert_eq!(normalize_restart_policy(Some("   ".into())), "no");
+        // Explicit policies pass through, so a long-lived service stays alertable.
+        assert_eq!(normalize_restart_policy(Some("always".into())), "always");
+        assert_eq!(
+            normalize_restart_policy(Some("on-failure".into())),
+            "on-failure"
+        );
+        assert_eq!(
+            normalize_restart_policy(Some("unless-stopped".into())),
+            "unless-stopped"
+        );
+        assert_eq!(normalize_restart_policy(Some("no".into())), "no");
     }
 
     #[test]
