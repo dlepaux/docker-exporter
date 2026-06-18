@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/dlepaux/docker-exporter/compare/v1.3.0...v1.4.0) (2026-06-18)
+
+
+### Features
+
+* **metrics:** emit restart_policy label on container_state ([88c1bef](https://github.com/dlepaux/docker-exporter/commit/88c1bef61303a0f082b7fda6d0bd82f57635695f))
+
 # [1.3.0](https://github.com/dlepaux/docker-exporter/compare/v1.2.0...v1.3.0) (2026-06-03)
 
 
