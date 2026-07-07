@@ -1,3 +1,10 @@
+## [1.4.1](https://github.com/dlepaux/docker-exporter/compare/v1.4.0...v1.4.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **deps:** patch-release the anyhow 1.0.103 security bump (RUSTSEC-2026-0190) ([23f2cb4](https://github.com/dlepaux/docker-exporter/commit/23f2cb476b23e5dfea555c7687edc45615c68bf1)), closes [#2](https://github.com/dlepaux/docker-exporter/issues/2)
+
 # [1.4.0](https://github.com/dlepaux/docker-exporter/compare/v1.3.0...v1.4.0) (2026-06-18)
 
 
