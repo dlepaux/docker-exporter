@@ -7,3 +7,5 @@ node_modules/
 package*.json
 .releaserc.cjs
 scripts/
+docs/
+brand/
