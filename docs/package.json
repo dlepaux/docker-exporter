@@ -1,0 +1,22 @@
+{
+  "name": "docker-exporter-docs",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:brand": "tsx scripts/generate-brand.ts",
+    "dev": "npm run build:brand && vitepress dev",
+    "build": "npm run build:brand && vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "sharp": "^0.34.5",
+    "tsx": "^4.21.0",
+    "vitepress": "^1.6.4",
+    "vitepress-plugin-llms": "^1.13.2",
+    "vue": "^3.5.13"
+  }
+}

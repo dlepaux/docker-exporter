@@ -1,0 +1,119 @@
+/* docker-exporter brand — "observability instrument": signal teal on deep slate,
+   mono display accents, a faint dashboard grid. Character comes from color +
+   monospace + texture, not a heavy web font (Core Web Vitals matter here). */
+
+:root {
+  --vp-c-brand-1: #0d9488;
+  --vp-c-brand-2: #0f766e;
+  --vp-c-brand-3: #14b8a6;
+  --vp-c-brand-soft: rgba(20, 184, 166, 0.14);
+
+  --de-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    "DejaVu Sans Mono", monospace;
+  --de-teal: #14b8a6;
+  --de-cyan: #22d3ee;
+  --de-mint: #5eead4;
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(
+    120deg,
+    #0d9488 0%,
+    #14b8a6 45%,
+    #0891b2 100%
+  );
+  --vp-home-hero-image-background-image: linear-gradient(
+    135deg,
+    rgba(20, 184, 166, 0.25) 0%,
+    rgba(34, 211, 238, 0.2) 100%
+  );
+  --vp-home-hero-image-filter: blur(52px);
+}
+
+.dark {
+  --vp-c-brand-1: #2dd4bf;
+  --vp-c-brand-2: #14b8a6;
+  --vp-c-brand-3: #0d9488;
+  --vp-c-brand-soft: rgba(45, 212, 191, 0.16);
+
+  --vp-home-hero-name-background: linear-gradient(
+    120deg,
+    #2dd4bf 0%,
+    #22d3ee 50%,
+    #14b8a6 100%
+  );
+}
+
+/* Monospace, tracked-out wordmark in the hero — reads as an instrument label. */
+.VPHero .name {
+  font-family: var(--de-mono);
+  letter-spacing: -0.02em;
+}
+
+/* Faint dashboard grid + teal wash behind the hero. */
+.VPHome {
+  position: relative;
+  overflow: hidden;
+}
+.VPHome::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  height: 640px;
+  background-image:
+    linear-gradient(rgba(20, 184, 166, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(20, 184, 166, 0.06) 1px, transparent 1px);
+  background-size: 40px 40px;
+  -webkit-mask-image: radial-gradient(120% 60% at 50% 0%, #000 0%, transparent 70%);
+  mask-image: radial-gradient(120% 60% at 50% 0%, #000 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+.VPHome .VPHero,
+.VPHome .VPFeatures,
+.VPHome .vp-doc {
+  position: relative;
+  z-index: 1;
+}
+
+/* Home "measured footprint" stat strip (used in index.md). */
+.de-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+  margin: 40px auto 8px;
+  max-width: 1152px;
+  padding: 0 24px;
+}
+.de-stat {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  padding: 20px 22px;
+  background: var(--vp-c-bg-soft);
+  transition: border-color 0.25s, transform 0.25s;
+}
+.de-stat:hover {
+  border-color: var(--de-teal);
+  transform: translateY(-2px);
+}
+.de-stat-num {
+  font-family: var(--de-mono);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--vp-c-brand-1);
+}
+.de-stat-label {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--vp-c-text-2);
+}
+
+/* Feature-card icons a touch bolder. */
+.VPFeature .icon {
+  background-color: var(--vp-c-brand-soft) !important;
+}
+
+/* Inline code gets a subtle teal tint — the "signal" running through the docs. */
+.vp-doc :not(pre) > code {
+  color: var(--vp-c-brand-1);
+}
