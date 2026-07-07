@@ -11,6 +11,7 @@ const DESCRIPTION =
   "A tiny Rust Prometheus exporter for Docker container metrics. Correct memory working set on ARM64 & cgroup v2 (Raspberry Pi 5), ~7 MiB RAM, ~9 MB image, read-only socket, non-root.";
 const OG_IMAGE = `${SITE}/og-share.png`;
 const REPO = "https://github.com/dlepaux/docker-exporter";
+const GA_ID = "G-BPJLP0VFFB"; // GA4 Measurement ID — public / client-side by design.
 
 // Keep the SoftwareApplication JSON-LD version in sync with the crate, automatically.
 const version =
@@ -149,6 +150,13 @@ export default defineConfig({
     ["link", { rel: "icon", type: "image/png", sizes: "96x96", href: "/favicon-96x96.png" }],
     ["link", { rel: "apple-touch-icon", sizes: "180x180", href: "/apple-touch-icon.png" }],
     ["link", { rel: "manifest", href: "/site.webmanifest" }],
+    // Google Analytics 4 (gtag). SPA route changes are tracked in theme/index.ts.
+    ["script", { async: "", src: `https://www.googletagmanager.com/gtag/js?id=${GA_ID}` }],
+    [
+      "script",
+      {},
+      `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${GA_ID}');`,
+    ],
   ],
 
   // Per-page SEO/GEO: canonical (no .html), OG title/description, JSON-LD.
