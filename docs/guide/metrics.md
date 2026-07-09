@@ -16,6 +16,18 @@ All per-container metrics carry the base labels `id`, `image`, and `name`. Some 
 | `docker_exporter_up`                      | gauge   | —      | Docker daemon reachable (`1` = up, `0` = down).      |
 | `docker_exporter_scrape_duration_seconds` | gauge   | —      | Duration of the last scrape, in seconds.             |
 | `docker_exporter_inspect_failures_total`  | counter | —      | Total container-inspect failures since start.        |
+| `docker_exporter_stats_failures_total`    | counter | —      | Total container-stats fetch failures since start.    |
+
+Alert on both failure counters. `docker_exporter_up` only tells you the daemon
+answered the container *list* — a scrape can be `up` and still be lying. When an
+inspect fails, that container's `health` and `restart_policy` read `unknown`;
+when a stats fetch fails, its cpu/memory/network series report `0` rather than
+disappearing, which is indistinguishable from a genuinely idle container.
+
+```promql
+rate(docker_exporter_inspect_failures_total[5m]) > 0
+rate(docker_exporter_stats_failures_total[5m]) > 0
+```
 
 ## CPU
 

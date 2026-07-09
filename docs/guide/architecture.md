@@ -12,12 +12,22 @@ docker-exporter has **no background loop**. Everything happens on the request.
 On each `GET /metrics`, the exporter:
 
 1. Lists all containers, running **and** stopped, so `container_state` covers every state.
-2. For every container, concurrently fetches **stats** (`bollard::stats(stream=false)`) and an **inspect** (health + restart policy), each with a **5 s timeout**; all containers run in parallel.
+2. For every container, concurrently fetches **stats** (`bollard::stats(stream=false)`) and an **inspect** (health + restart policy), each with a **5 s timeout**. Containers are processed at a **bounded concurrency of 64**, not all at once.
 3. Encodes the result as Prometheus text.
 
-Failed or timed-out calls are logged; only **inspect** failures increment `docker_exporter_inspect_failures_total`. The container is still emitted either way — a stats failure zeroes its CPU/memory/network/block I/O, an inspect failure sets `health="none"` and `restart_policy="unknown"` — so one bad container never fails the whole scrape.
+Stats are skipped for containers that are neither `running` nor `paused`. Docker closes the stats stream empty for them, so the call could only fail, and their CPU/memory series are zero either way — skipping changes no output, it just avoids a doomed request.
 
-With no polling, the process sits idle between scrapes, so scrape duration tracks Docker daemon latency — the concurrent `/containers/{id}/stats` and `/containers/{id}/json` calls per container — rather than the exporter's own encoding work.
+Failed or timed-out calls are logged and counted: **inspect** failures increment `docker_exporter_inspect_failures_total`, **stats** failures increment `docker_exporter_stats_failures_total`. The container is still emitted either way — a stats failure zeroes its CPU/memory/network/block I/O, an inspect failure sets `health="none"` and `restart_policy="unknown"` — so one bad container never fails the whole scrape. When failures are widespread the per-container log lines are sampled (10 per kind per scrape) and followed by one aggregate line; the counters carry the exact totals.
+
+### Why concurrency is bounded
+
+Each in-flight container may hold **two** socket connections at once (stats + inspect), and hyper opens a fresh file descriptor per connection — a pooled HTTP/1.1 connection serves one request at a time, and the pool caps only *idle* connections, never concurrent ones.
+
+An unbounded fan-out over `N` containers therefore attempts `~2N` simultaneous `connect()` calls. Past the process `RLIMIT_NOFILE` (soft **1024** under Docker's default) every further connect fails with `EMFILE`, which hyper reports only as the opaque `client error (Connect)` — the errno lives in a `source` that `Display` never prints. On a host with a few thousand containers this turns every scrape into thousands of warnings while the exporter still reports `docker_exporter_up 1`.
+
+Bounding the fan-out caps peak descriptors at `2 × 64` regardless of `N`. The cost is negligible: 2080 containers inspect in about **0.4 s**.
+
+With no polling, the process sits idle between scrapes, so scrape duration tracks Docker daemon latency — the `/containers/{id}/stats` and `/containers/{id}/json` calls — rather than the exporter's own encoding work.
 
 ## Working set computation
 
@@ -30,7 +40,7 @@ This is the calculation cAdvisor gets wrong on ARM64 + cgroup v2, where it repor
 
 ## State across scrapes
 
-The Prometheus output is rebuilt from scratch each scrape as `MetricFamily` protos (no `Registry`), so nothing stale carries over and counters emit as absolute values. The one piece of cross-scrape state is `docker_exporter_inspect_failures_total` — an `AtomicU64` in the shared `AppState` that accumulates since start, by design. Everything else is per-request, keeping memory flat and behavior predictable under concurrent scrapes.
+The Prometheus output is rebuilt from scratch each scrape as `MetricFamily` protos (no `Registry`), so nothing stale carries over and counters emit as absolute values. The only cross-scrape state is the two failure counters, `docker_exporter_inspect_failures_total` and `docker_exporter_stats_failures_total` — `AtomicU64`s in the shared `AppState` that accumulate since start, by design. Everything else is per-request, keeping memory flat and behavior predictable under concurrent scrapes.
 
 ## Footprint
 

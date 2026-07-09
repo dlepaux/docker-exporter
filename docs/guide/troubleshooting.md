@@ -34,6 +34,29 @@ Any remaining difference after that is usually one scrape window of drift. If wo
 
 The bottleneck is the Docker daemon, not the exporter. Containers under heavy I/O sometimes block on stats — the 5 s per-container timeout caps individual stalls. If you consistently see 4–5 s scrapes, the daemon is overloaded; check `dockerd` CPU and disk pressure.
 
+## Floods of `client error (Connect)` warnings {#connect-errors}
+
+```
+WARN docker_exporter::collector: failed to fetch stats container=foo err=Error in the hyper legacy client: client error (Connect)
+WARN docker_exporter::collector: inspect failed container=foo err=Error in the hyper legacy client: client error (Connect) reason="error"
+```
+
+hyper prints only the error *kind* here; the underlying errno is in a `source` that `Display` never shows. In practice this is almost always **`EMFILE` — the process ran out of file descriptors**, not a broken socket. The give-away is that `/health` still passes and `docker_exporter_up` still reads `1`: the daemon is reachable, the exporter just can't open more connections to it.
+
+Since v1.5 the fan-out is bounded to 64 containers in flight, so this should no longer be reachable through container count alone. If you still see it:
+
+```bash
+# how many containers does the exporter enumerate? (it lists stopped ones too)
+docker ps -aq | wc -l
+
+# what is the exporter's soft fd limit, and what is it actually using?
+pid=$(docker inspect -f '{{.State.Pid}}' docker-exporter)
+grep 'open files' /proc/$pid/limits
+ls /proc/$pid/fd | wc -l
+```
+
+A peak that sits exactly at the soft limit confirms fd exhaustion. Raise it with `ulimits: { nofile: 65536 }` on the service, but treat that as a symptom fix — the usual root cause is thousands of un-reaped exited containers, which also bloat Prometheus cardinality. Reap them, or filter them out with [`EXCLUDE_CONTAINERS`](/guide/configuration).
+
 ## Still stuck?
 
 Open an issue on [GitHub](https://github.com/dlepaux/docker-exporter/issues) with your `docker run`/Compose config, host arch, and `LOG_LEVEL=debug` output.
