@@ -35,6 +35,7 @@ pub struct AppState {
     pub docker: Docker,
     pub exclude: config::ExcludeMatcher,
     pub inspect_failures: std::sync::atomic::AtomicU64,
+    pub stats_failures: std::sync::atomic::AtomicU64,
 }
 
 /// Per-request timeout for the HTTP server.
@@ -61,7 +62,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 
 async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let result = collector::collect(&state.docker, &state.exclude, &state.inspect_failures).await;
+    let result = collector::collect(
+        &state.docker,
+        &state.exclude,
+        &state.inspect_failures,
+        &state.stats_failures,
+    )
+    .await;
     let body = metrics::encode(&result);
 
     (
@@ -82,6 +89,7 @@ mod tests {
             docker,
             exclude: config::ExcludeMatcher::parse("").expect("empty exclude is always valid"),
             inspect_failures: std::sync::atomic::AtomicU64::new(0),
+            stats_failures: std::sync::atomic::AtomicU64::new(0),
         }))
     }
 
@@ -149,6 +157,10 @@ mod tests {
         assert!(
             body.contains("docker_exporter_inspect_failures_total"),
             "inspect-failures counter missing"
+        );
+        assert!(
+            body.contains("docker_exporter_stats_failures_total"),
+            "stats-failures counter missing"
         );
     }
 }

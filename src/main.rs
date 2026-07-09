@@ -93,6 +93,7 @@ async fn main() {
         docker,
         exclude: config.exclude,
         inspect_failures: std::sync::atomic::AtomicU64::new(0),
+        stats_failures: std::sync::atomic::AtomicU64::new(0),
     });
     let app = build_router(state);
 

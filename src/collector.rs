@@ -1,14 +1,51 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bollard::Docker;
 use bollard::models::{ContainerNetworkStats, ContainerStatsResponse};
 use bollard::query_parameters::{ListContainersOptionsBuilder, StatsOptionsBuilder};
-use futures::future::join_all;
-use futures::stream::StreamExt;
+use futures::stream::{self, StreamExt};
 
 use crate::config::ExcludeMatcher;
+
+/// Per-container Docker API timeout (stats and inspect each get their own).
+const CONTAINER_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Maximum number of containers queried concurrently.
+///
+/// Every in-flight container holds up to two unix-socket connections (stats +
+/// inspect run concurrently), and hyper opens a fresh fd per connection — a
+/// pooled HTTP/1.1 connection serves one request at a time, and the pool caps
+/// only *idle* connections, never concurrent ones. An unbounded fan-out over N
+/// containers therefore attempts ~2N simultaneous `connect()` calls and blows
+/// past `RLIMIT_NOFILE` (soft 1024 under Docker's default). Past that ceiling
+/// every connect fails with EMFILE, which hyper reports only as the opaque
+/// "client error (Connect)" — the errno lives in a Display-invisible `source`.
+///
+/// Bounding the fan-out caps peak fds at 2×this regardless of N, which is what
+/// makes the exporter safe on hosts with thousands of containers. 64 keeps the
+/// scrape a few short waves on a large host while staying an order of magnitude
+/// under the default limit.
+const MAX_CONCURRENT_CONTAINER_QUERIES: usize = 64;
+
+/// Each in-flight container may hold two sockets at once (stats + inspect), and
+/// Docker's default soft `RLIMIT_NOFILE` is 1024. Enforced at compile time so
+/// raising the bound cannot silently re-create the 2026-07-09 fd exhaustion.
+const _: () = assert!(
+    MAX_CONCURRENT_CONTAINER_QUERIES * 2 < 1024,
+    "concurrency bound must leave fd headroom under the default RLIMIT_NOFILE"
+);
+
+/// Per-scrape cap on individual container WARN lines, applied per failure kind.
+///
+/// The `*_failures_total` counters are the alertable signal; these log lines are
+/// forensic samples. Uncapped, a daemon that fails every container turns one
+/// scrape into 2N lines — at N=2080 on a 15s interval that measured ~19.7M
+/// lines/day. A bounded sample plus one aggregate line preserves the forensics
+/// without the flood.
+const MAX_WARN_LINES_PER_KIND: usize = 10;
 
 /// Collected metrics for a single container.
 #[derive(Debug, Clone)]
@@ -50,6 +87,7 @@ pub struct ScrapeResult {
     pub scrape_duration_seconds: f64,
     pub docker_up: bool,
     pub inspect_failures_total: u64,
+    pub stats_failures_total: u64,
 }
 
 /// Collect metrics for all running containers.
@@ -60,10 +98,12 @@ pub async fn collect(
     docker: &Docker,
     exclude: &ExcludeMatcher,
     inspect_failures: &AtomicU64,
+    stats_failures: &AtomicU64,
 ) -> ScrapeResult {
     let start = Instant::now();
 
-    let containers = match list_and_collect(docker, exclude, inspect_failures).await {
+    let containers = match list_and_collect(docker, exclude, inspect_failures, stats_failures).await
+    {
         Ok(containers) => containers,
         Err(err) => {
             tracing::error!(%err, "failed to collect container metrics");
@@ -72,6 +112,7 @@ pub async fn collect(
                 scrape_duration_seconds: start.elapsed().as_secs_f64(),
                 docker_up: false,
                 inspect_failures_total: inspect_failures.load(Ordering::Relaxed),
+                stats_failures_total: stats_failures.load(Ordering::Relaxed),
             };
         }
     };
@@ -81,6 +122,66 @@ pub async fn collect(
         scrape_duration_seconds: start.elapsed().as_secs_f64(),
         docker_up: true,
         inspect_failures_total: inspect_failures.load(Ordering::Relaxed),
+        stats_failures_total: stats_failures.load(Ordering::Relaxed),
+    }
+}
+
+/// Drive `futures` to completion, keeping at most `max_concurrency` in flight.
+///
+/// This is the bound that keeps peak open file descriptors proportional to
+/// `max_concurrency` rather than to the container count. See
+/// [`MAX_CONCURRENT_CONTAINER_QUERIES`] for why an unbounded fan-out is a bug
+/// and not merely an inefficiency.
+///
+/// Results come back in completion order, not input order; every caller pairs
+/// each result with its own container, so order carries no meaning.
+async fn buffer_bounded<I>(futures: I, max_concurrency: usize) -> Vec<<I::Item as Future>::Output>
+where
+    I: IntoIterator,
+    I::Item: Future,
+{
+    stream::iter(futures)
+        // `max(1)` because `buffer_unordered(0)` never polls anything and hangs.
+        .buffer_unordered(max_concurrency.max(1))
+        .collect()
+        .await
+}
+
+/// Whether the Docker stats endpoint can return anything for a container in
+/// this state.
+///
+/// Stats are read from live cgroup counters, so only a container with a running
+/// (or frozen-but-live) task has them. For every other state Docker closes the
+/// stats stream empty, which [`fetch_stats`] surfaces as a synthetic 404.
+fn should_fetch_stats(state: &str) -> bool {
+    matches!(state, "running" | "paused")
+}
+
+/// A per-scrape allowance of log lines for one failure kind.
+///
+/// Bounds an otherwise unbounded resource: without it the log volume of a
+/// degraded scrape scales with the container count.
+struct WarnBudget {
+    remaining: usize,
+    emitted: u64,
+}
+
+impl WarnBudget {
+    fn new(cap: usize) -> Self {
+        Self {
+            remaining: cap,
+            emitted: 0,
+        }
+    }
+
+    /// Claim one line. Returns `false` once the budget for this scrape is spent.
+    fn take(&mut self) -> bool {
+        if self.remaining == 0 {
+            return false;
+        }
+        self.remaining -= 1;
+        self.emitted += 1;
+        true
     }
 }
 
@@ -88,6 +189,7 @@ async fn list_and_collect(
     docker: &Docker,
     exclude: &ExcludeMatcher,
     inspect_failures: &AtomicU64,
+    stats_failures: &AtomicU64,
 ) -> Result<Vec<ContainerMetrics>, bollard::errors::Error> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -101,8 +203,10 @@ async fn list_and_collect(
         ))
         .await?;
 
-    // Fetch stats concurrently for all containers (excluding filtered ones)
-    let futures: Vec<_> = container_list
+    // Build one query per container (excluding filtered ones). Futures are inert
+    // until polled, so this allocates cheaply — `buffer_bounded` below decides how
+    // many actually run, and therefore how many sockets are ever open at once.
+    let queries: Vec<_> = container_list
         .iter()
         .filter(|container| {
             if exclude.is_empty() {
@@ -118,16 +222,35 @@ async fn list_and_collect(
         })
         .map(|container| {
             let id = container.id.clone().unwrap_or_default();
+            // The list summary already carries the state, so we know before spending a
+            // connection whether stats can exist at all.
+            let state = container
+                .state
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default();
             let docker = docker.clone();
             async move {
-                let stats_fut = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    fetch_stats(&docker, &id),
-                );
+                // `None` = deliberately not fetched. It yields the same zeroed metrics
+                // as a failed fetch, so skipping a doomed call for a non-running
+                // container changes no output — it only saves a socket and a WARN line.
+                let stats_fut = async {
+                    if should_fetch_stats(&state) {
+                        Some(
+                            tokio::time::timeout(
+                                CONTAINER_QUERY_TIMEOUT,
+                                fetch_stats(&docker, &id),
+                            )
+                            .await,
+                        )
+                    } else {
+                        None
+                    }
+                };
                 // structured health only exists in the inspect response, not the list
                 // summary — so add a concurrent inspect call (own 5s timeout).
                 let inspect_fut = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    CONTAINER_QUERY_TIMEOUT,
                     docker.inspect_container(
                         &id,
                         None::<bollard::query_parameters::InspectContainerOptions>,
@@ -139,9 +262,13 @@ async fn list_and_collect(
         })
         .collect();
 
-    let results = join_all(futures).await;
+    let results = buffer_bounded(queries, MAX_CONCURRENT_CONTAINER_QUERIES).await;
 
     let mut metrics = Vec::with_capacity(results.len());
+    let mut stats_warns = WarnBudget::new(MAX_WARN_LINES_PER_KIND);
+    let mut inspect_warns = WarnBudget::new(MAX_WARN_LINES_PER_KIND);
+    let mut stats_failed: u64 = 0;
+    let mut inspect_failed: u64 = 0;
 
     for (container, stats_result, inspect_result) in results {
         let id = container.id.clone().unwrap_or_default();
@@ -167,13 +294,23 @@ async fn list_and_collect(
         // accept arbitrary UTF-8), the input must be sanitized before reaching
         // `tracing` or Prometheus output.
         let stats = match stats_result {
-            Ok(Ok(s)) => Some(s),
-            Ok(Err(err)) => {
-                tracing::warn!(container = %name, %err, "failed to fetch stats");
+            // Not running: stats were never requested (see `should_fetch_stats`).
+            None => None,
+            Some(Ok(Ok(s))) => Some(s),
+            Some(Ok(Err(err))) => {
+                stats_failed += 1;
+                stats_failures.fetch_add(1, Ordering::Relaxed);
+                if stats_warns.take() {
+                    tracing::warn!(container = %name, %err, "failed to fetch stats");
+                }
                 None
             }
-            Err(_) => {
-                tracing::warn!(container = %name, "stats fetch timed out (5s)");
+            Some(Err(_)) => {
+                stats_failed += 1;
+                stats_failures.fetch_add(1, Ordering::Relaxed);
+                if stats_warns.take() {
+                    tracing::warn!(container = %name, "stats fetch timed out (5s)");
+                }
                 None
             }
         };
@@ -201,13 +338,19 @@ async fn list_and_collect(
                 (normalize_health(raw), normalize_restart_policy(policy))
             }
             Ok(Err(err)) => {
-                tracing::warn!(container = %name, %err, reason = "error", "inspect failed");
+                inspect_failed += 1;
                 inspect_failures.fetch_add(1, Ordering::Relaxed);
+                if inspect_warns.take() {
+                    tracing::warn!(container = %name, %err, reason = "error", "inspect failed");
+                }
                 ("none".to_owned(), "unknown".to_owned())
             }
             Err(_) => {
-                tracing::warn!(container = %name, reason = "timeout", "inspect timed out (5s)");
+                inspect_failed += 1;
                 inspect_failures.fetch_add(1, Ordering::Relaxed);
+                if inspect_warns.take() {
+                    tracing::warn!(container = %name, reason = "timeout", "inspect timed out (5s)");
+                }
                 ("none".to_owned(), "unknown".to_owned())
             }
         };
@@ -246,6 +389,19 @@ async fn list_and_collect(
             started_at: created,
             last_seen: now,
         });
+    }
+
+    // Whatever the per-container budget swallowed still has to be visible once.
+    let suppressed =
+        (stats_failed - stats_warns.emitted) + (inspect_failed - inspect_warns.emitted);
+    if suppressed > 0 {
+        tracing::warn!(
+            containers = metrics.len(),
+            stats_failures = stats_failed,
+            inspect_failures = inspect_failed,
+            suppressed,
+            "container metric collection degraded; per-container warnings suppressed for this scrape"
+        );
     }
 
     Ok(metrics)
@@ -414,8 +570,94 @@ fn extract_blkio(stats: &ContainerStatsResponse, op: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_health, normalize_restart_policy};
+    use super::{
+        WarnBudget, buffer_bounded, normalize_health, normalize_restart_policy, should_fetch_stats,
+    };
     use crate::config::ExcludeMatcher;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The load-bearing regression test for the 2026-07-09 log flood: an
+    /// unbounded fan-out opened ~2N sockets at once, hit the 1024 fd ceiling,
+    /// and turned every scrape into thousands of EMFILE WARN lines. Peak
+    /// in-flight work must depend on the bound, never on the input size.
+    #[tokio::test]
+    async fn buffer_bounded_never_exceeds_max_concurrency() {
+        let inflight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let limit = 8;
+        let items = 500;
+
+        let queries = (0..items).map(|i| {
+            let inflight = Arc::clone(&inflight);
+            let peak = Arc::clone(&peak);
+            async move {
+                let now = inflight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                // Yield so the executor can poll the other buffered futures —
+                // without this every future completes on first poll and nothing
+                // is ever concurrent, which would make the assertion vacuous.
+                tokio::task::yield_now().await;
+                inflight.fetch_sub(1, Ordering::SeqCst);
+                i
+            }
+        });
+
+        let out = buffer_bounded(queries, limit).await;
+
+        assert_eq!(out.len(), items, "every item must still be processed");
+        let peak = peak.load(Ordering::SeqCst);
+        assert!(
+            peak <= limit,
+            "peak concurrency {peak} exceeded the bound {limit}"
+        );
+        assert!(
+            peak > 1,
+            "work ran serially (peak {peak}) — the test would pass even unbounded"
+        );
+    }
+
+    #[tokio::test]
+    async fn buffer_bounded_treats_zero_as_serial_not_deadlock() {
+        // buffer_unordered(0) would hang forever; the bound is clamped to >= 1.
+        let mut out = buffer_bounded((0..3).map(|i| async move { i * 2 }), 0).await;
+        out.sort_unstable();
+        assert_eq!(out, vec![0, 2, 4]);
+    }
+
+    #[test]
+    fn stats_are_only_fetched_for_live_containers() {
+        // Live: cgroup counters exist.
+        assert!(should_fetch_stats("running"));
+        assert!(should_fetch_stats("paused"));
+        // Not live: Docker closes the stats stream empty, which `fetch_stats`
+        // turns into a synthetic 404. Asking costs a socket and a WARN line.
+        assert!(!should_fetch_stats("exited"));
+        assert!(!should_fetch_stats("created"));
+        assert!(!should_fetch_stats("restarting"));
+        assert!(!should_fetch_stats("removing"));
+        assert!(!should_fetch_stats("dead"));
+        // Unknown/absent state must not spend a doomed call either.
+        assert!(!should_fetch_stats(""));
+        assert!(!should_fetch_stats("Running"));
+    }
+
+    #[test]
+    fn warn_budget_caps_lines_and_counts_what_it_emitted() {
+        let mut budget = WarnBudget::new(2);
+        assert!(budget.take());
+        assert!(budget.take());
+        assert!(!budget.take(), "budget must refuse once spent");
+        assert!(!budget.take());
+        assert_eq!(budget.emitted, 2, "only granted lines count as emitted");
+    }
+
+    #[test]
+    fn warn_budget_of_zero_emits_nothing() {
+        let mut budget = WarnBudget::new(0);
+        assert!(!budget.take());
+        assert_eq!(budget.emitted, 0);
+    }
 
     #[test]
     fn normalize_health_maps_known_states() {

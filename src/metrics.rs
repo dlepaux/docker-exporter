@@ -37,6 +37,12 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
         vec![counter_metric(&[], result.inspect_failures_total as f64)],
     ));
 
+    families.push(counter_family(
+        "docker_exporter_stats_failures_total",
+        "Total container stats fetch failures since exporter start",
+        vec![counter_metric(&[], result.stats_failures_total as f64)],
+    ));
+
     if result.containers.is_empty() {
         return families;
     }
@@ -278,6 +284,7 @@ mod tests {
             scrape_duration_seconds: 0.05,
             docker_up: true,
             inspect_failures_total: 0,
+            stats_failures_total: 0,
         };
 
         let output = encode(&result);
@@ -350,6 +357,16 @@ mod tests {
             output.contains("docker_exporter_inspect_failures_total 0"),
             "missing inspect-failures value"
         );
+        // Stats-fetch failures get their own alertable counter: they are the
+        // other half of the collector's warn-and-continue paths.
+        assert!(
+            output.contains("# TYPE docker_exporter_stats_failures_total counter"),
+            "missing stats-failures counter type"
+        );
+        assert!(
+            output.contains("docker_exporter_stats_failures_total 0"),
+            "missing stats-failures value"
+        );
 
         // Exporter meta
         assert!(
@@ -369,6 +386,7 @@ mod tests {
             scrape_duration_seconds: 0.001,
             docker_up: false,
             inspect_failures_total: 0,
+            stats_failures_total: 0,
         };
 
         let output = encode(&result);
@@ -391,6 +409,7 @@ mod tests {
             scrape_duration_seconds: 0.01,
             docker_up: true,
             inspect_failures_total: 0,
+            stats_failures_total: 0,
         };
 
         let output = encode(&result);
@@ -407,6 +426,7 @@ mod tests {
             scrape_duration_seconds: 0.01,
             docker_up: true,
             inspect_failures_total: 0,
+            stats_failures_total: 0,
         };
 
         let output = encode(&result);
@@ -427,10 +447,29 @@ mod tests {
             "container_last_seen",
             "container_health_status",
             "docker_exporter_inspect_failures_total",
+            "docker_exporter_stats_failures_total",
         ];
 
         for name in expected {
             assert!(output.contains(name), "metric {name} not found in output");
         }
+    }
+
+    #[test]
+    fn failure_counters_are_emitted_when_docker_is_down() {
+        // Both counters must survive the empty-container early return, otherwise
+        // the alert rules that read them go stale exactly when they matter most.
+        let result = ScrapeResult {
+            containers: vec![],
+            scrape_duration_seconds: 0.001,
+            docker_up: false,
+            inspect_failures_total: 7,
+            stats_failures_total: 12,
+        };
+
+        let output = encode(&result);
+
+        assert!(output.contains("docker_exporter_inspect_failures_total 7"));
+        assert!(output.contains("docker_exporter_stats_failures_total 12"));
     }
 }
