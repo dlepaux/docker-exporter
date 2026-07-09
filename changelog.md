@@ -1,3 +1,10 @@
+## [1.4.2](https://github.com/dlepaux/docker-exporter/compare/v1.4.1...v1.4.2) (2026-07-09)
+
+
+### Bug Fixes
+
+* **collector:** bound per-container fan-out to stop fd exhaustion ([7c66fc2](https://github.com/dlepaux/docker-exporter/commit/7c66fc231c3a93e7f5cac4dada6e146de0093c80))
+
 ## [1.4.1](https://github.com/dlepaux/docker-exporter/compare/v1.4.0...v1.4.1) (2026-07-07)
 
 

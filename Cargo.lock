@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "docker-exporter"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "axum",
  "axum-test",
