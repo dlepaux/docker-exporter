@@ -1,3 +1,10 @@
+# [1.5.0](https://github.com/dlepaux/docker-exporter/compare/v1.4.2...v1.5.0) (2026-07-31)
+
+
+### Features
+
+* **metrics:** emit container_exit_code for terminal containers ([ed8c3b2](https://github.com/dlepaux/docker-exporter/commit/ed8c3b25335640691832dc8581faad05e88f19b1))
+
 ## [1.4.2](https://github.com/dlepaux/docker-exporter/compare/v1.4.1...v1.4.2) (2026-07-09)
 
 
