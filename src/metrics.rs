@@ -1,7 +1,7 @@
 use prometheus::TextEncoder;
 use prometheus::proto::{Counter, Gauge, LabelPair, Metric, MetricFamily, MetricType};
 
-use crate::collector::{ContainerMetrics, ScrapeResult};
+use crate::collector::{ContainerMetrics, ScrapeResult, is_terminal_state};
 
 /// Encode a scrape result into Prometheus text exposition format.
 ///
@@ -61,6 +61,7 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
     let mut blkio_metrics = Vec::new();
     // State & lifecycle
     let mut state_metrics = Vec::new();
+    let mut exit_code_metrics = Vec::new();
     let mut health_metrics = Vec::new();
     let mut start_time_metrics = Vec::new();
     let mut last_seen_metrics = Vec::new();
@@ -107,6 +108,15 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
         // label instead of a hand-curated name blacklist.
         state_labels.push(label("restart_policy", &c.restart_policy));
         state_metrics.push(gauge_metric(&state_labels, state_value));
+
+        // Exit code — the only failure signal a one-shot has. `container_state`
+        // collapses to 0 for "not running" and cannot separate Exited(0) from
+        // Exited(1). Same `restart_policy`-on-this-family-only rule as above.
+        if let Some(code) = terminal_exit_code(c) {
+            let mut exit_labels = base_labels.clone();
+            exit_labels.push(label("restart_policy", &c.restart_policy));
+            exit_code_metrics.push(gauge_metric(&exit_labels, code as f64));
+        }
 
         // Health — one series per container, status label = current state, value 1.
         // c.health is a plain String (normalize_health already collapses unknown → "none").
@@ -170,6 +180,19 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
         "Container state (1 = running, 0 = other)",
         state_metrics,
     ));
+    // Emitted only for containers that actually finished: an absent series says
+    // "nothing to report", which is the honest encoding for a container that is
+    // still running (or was never inspectable). The series appears when a
+    // one-shot finishes and disappears when the container is replaced — so an
+    // alert built on it resolves exactly when the operator redeploys.
+    if !exit_code_metrics.is_empty() {
+        families.push(gauge_family(
+            "container_exit_code",
+            "Exit code of a container in a terminal state (exited/dead); absent while running",
+            exit_code_metrics,
+        ));
+    }
+
     families.push(gauge_family(
         "container_health_status",
         "Container health status as reported by Docker (1 for current state)",
@@ -187,6 +210,21 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
     ));
 
     families
+}
+
+/// The exit code worth publishing for a container, or `None` when there is
+/// nothing honest to say.
+///
+/// Two ways to be silent, and both matter:
+/// - the container has not finished (`is_terminal_state`) — inspect still hands
+///   back `ExitCode: 0`, which would read as "succeeded";
+/// - inspect failed, so the collector holds `None` — a substituted 0 would
+///   report success for a container it could not read at all.
+fn terminal_exit_code(c: &ContainerMetrics) -> Option<i64> {
+    if !is_terminal_state(&c.state) {
+        return None;
+    }
+    c.exit_code
 }
 
 fn base_labels(c: &ContainerMetrics) -> Vec<LabelPair> {
@@ -254,6 +292,9 @@ mod tests {
             state: "running".into(),
             health: "healthy".into(),
             restart_policy: "always".into(),
+            // Docker really does report `ExitCode: 0` for a running container —
+            // the fixture keeps that trap in the tests instead of hiding it.
+            exit_code: Some(0),
             cpu_usage_seconds: 42.5,
             memory_usage_bytes: 104_857_600.0,
             memory_working_set_bytes: 83_886_080.0,
@@ -275,6 +316,28 @@ mod tests {
             started_at: 1712400000.0,
             last_seen: 1712403600.0,
         }
+    }
+
+    /// A one-shot / batch container (`restart: "no"`) in an arbitrary state.
+    fn one_shot(state: &str, exit_code: Option<i64>) -> ContainerMetrics {
+        ContainerMetrics {
+            name: "mako-migrate".into(),
+            state: state.into(),
+            health: "none".into(),
+            restart_policy: "no".into(),
+            exit_code,
+            ..sample_container()
+        }
+    }
+
+    fn encode_one(container: ContainerMetrics) -> String {
+        encode(&ScrapeResult {
+            containers: vec![container],
+            scrape_duration_seconds: 0.01,
+            docker_up: true,
+            inspect_failures_total: 0,
+            stats_failures_total: 0,
+        })
     }
 
     #[test]
@@ -422,7 +485,10 @@ mod tests {
     #[test]
     fn all_metric_families_present() {
         let result = ScrapeResult {
-            containers: vec![sample_container()],
+            // One running + one finished one-shot: the conditional families
+            // (blkio, exit code) only exist when some container warrants them,
+            // so the inventory needs both shapes to be complete.
+            containers: vec![sample_container(), one_shot("exited", Some(1))],
             scrape_duration_seconds: 0.01,
             docker_up: true,
             inspect_failures_total: 0,
@@ -443,6 +509,7 @@ mod tests {
             "container_network_transmit_bytes_total",
             "container_blkio_device_usage_total",
             "container_state",
+            "container_exit_code",
             "container_start_time_seconds",
             "container_last_seen",
             "container_health_status",
@@ -453,6 +520,86 @@ mod tests {
         for name in expected {
             assert!(output.contains(name), "metric {name} not found in output");
         }
+    }
+
+    // --- container_exit_code ------------------------------------------------
+    // A `restart: "no"` container that exits non-zero is invisible to every
+    // other family: container_state reports 0 for "not running" and cannot tell
+    // Exited(0) from Exited(1), and the ContainerStopped alert deliberately
+    // excludes one-shots. The exit code is the ONLY signal these have.
+
+    #[test]
+    fn exit_code_emitted_for_finished_one_shot() {
+        let output = encode_one(one_shot("exited", Some(1)));
+
+        assert!(
+            output.contains("# TYPE container_exit_code gauge"),
+            "missing exit-code gauge type"
+        );
+        assert!(
+            output.contains(
+                r#"container_exit_code{id="abc123def456",image="myimage:latest",name="mako-migrate",restart_policy="no"} 1"#
+            ),
+            "exit-code series must carry the base labels + restart_policy, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn exit_code_emitted_for_dead_container() {
+        // `dead` is terminal too — the process is gone, the code is final.
+        let output = encode_one(one_shot("dead", Some(255)));
+        assert!(output.contains(r#"name="mako-migrate",restart_policy="no"} 255"#));
+    }
+
+    #[test]
+    fn exit_code_value_is_the_raw_code_not_a_boolean() {
+        // Codes this fleet produced in a single week: 137 (SIGKILL/OOM) and 78
+        // (a migrate runner's own abort). Clamping either to 1 erases the
+        // diagnosis that makes the alert actionable.
+        assert!(encode_one(one_shot("exited", Some(137))).contains(r#"restart_policy="no"} 137"#));
+        assert!(encode_one(one_shot("exited", Some(78))).contains(r#"restart_policy="no"} 78"#));
+    }
+
+    #[test]
+    fn exit_code_absent_for_running_container() {
+        // The fixture is running with `exit_code: Some(0)` — exactly what
+        // inspect reports for a healthy long-lived service. Publishing it would
+        // put a permanent `container_exit_code … 0` on every running container,
+        // burying the one-shot signal in noise and inviting a `!= 0` alert to be
+        // written against a family that mostly describes containers that never
+        // exited.
+        let output = encode_one(sample_container());
+
+        assert!(
+            !output.contains("container_exit_code"),
+            "a running container has no exit code to report, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn exit_code_absent_for_created_container() {
+        // Never ran → its `ExitCode: 0` means nothing. Emitting it would read as
+        // "succeeded" for a one-shot that has not started.
+        let output = encode_one(one_shot("created", Some(0)));
+
+        assert!(
+            !output.contains("container_exit_code"),
+            "a created container has not run, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn exit_code_absent_when_inspect_failed() {
+        // Inspect failure → `None`. Substituting 0 here would report "the
+        // migration succeeded" for a container we could not read at all — the
+        // confidently-wrong failure mode. Absence is honest, and
+        // docker_exporter_inspect_failures_total already alerts on the blindness.
+        let output = encode_one(one_shot("exited", None));
+
+        assert!(
+            !output.contains("container_exit_code"),
+            "unknown exit code must produce NO series, never a fabricated 0, got:\n{output}"
+        );
     }
 
     #[test]

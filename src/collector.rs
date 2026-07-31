@@ -56,6 +56,14 @@ pub struct ContainerMetrics {
     pub state: String,
     pub health: String,
     pub restart_policy: String,
+    /// Last exit code reported by inspect, or `None` when inspect failed.
+    ///
+    /// This is the RAW inspect value for every container, including running
+    /// ones — Docker reports `ExitCode: 0` for a container that has never
+    /// exited, so this field on its own cannot be read as "succeeded". The
+    /// terminal-state gate in `metrics.rs` is what decides when it means
+    /// anything; `None` means "we don't know", never "0".
+    pub exit_code: Option<i64>,
     pub cpu_usage_seconds: f64,
     pub memory_usage_bytes: f64,
     pub memory_working_set_bytes: f64,
@@ -155,6 +163,20 @@ where
 /// stats stream empty, which [`fetch_stats`] surfaces as a synthetic 404.
 fn should_fetch_stats(state: &str) -> bool {
     matches!(state, "running" | "paused")
+}
+
+/// Whether a container has finished running, so its exit code is its verdict.
+///
+/// Docker's state vocabulary splits three ways for our purposes:
+/// live (`running`/`paused` — see [`should_fetch_stats`]), terminal
+/// (`exited`/`dead` — the process is gone and `ExitCode` is final), and
+/// in-between (`created`/`restarting`/`removing`, where inspect still carries
+/// the *previous* run's `ExitCode`, or `0` for a container that never ran).
+///
+/// Only the terminal set may publish an exit code: a `created` container
+/// reporting `ExitCode: 0` would read as "succeeded" when nothing has run.
+pub fn is_terminal_state(state: &str) -> bool {
+    matches!(state, "exited" | "dead")
 }
 
 /// A per-scrape allowance of log lines for one failure kind.
@@ -317,25 +339,33 @@ async fn list_and_collect(
 
         // Health from inspect. HealthStatusEnum impls Display (like ContainerSummaryStateEnum
         // used for `state` above) → .to_string() yields the API value; normalize it.
-        // Health + restart policy both come from the SAME inspect response (two
-        // independent fields → partial moves are fine). restart_policy lets the
+        // Health, restart policy and exit code all come from the SAME inspect
+        // response — no extra API call, no extra socket. restart_policy lets the
         // alerting layer exclude intentional one-shots (restart:no) by label
         // instead of a hand-curated name blacklist. On inspect FAILURE → "unknown"
         // (never "no"): an unknown policy must still alert (fail-safe), never
-        // silently exempt a real crashed service.
-        let (health, restart_policy) = match inspect_result {
+        // silently exempt a real crashed service. The exit code degrades the same
+        // way, to `None` — a fabricated 0 would read as "the one-shot succeeded",
+        // which is the confidently-wrong answer.
+        let (health, restart_policy, exit_code) = match inspect_result {
             Ok(Ok(inspect)) => {
-                let raw = inspect
-                    .state
-                    .and_then(|s| s.health)
+                let inspect_state = inspect.state;
+                let raw = inspect_state
+                    .as_ref()
+                    .and_then(|s| s.health.as_ref())
                     .and_then(|h| h.status)
                     .map(|st| st.to_string());
+                let code = inspect_state.and_then(|s| s.exit_code);
                 let policy = inspect
                     .host_config
                     .and_then(|h| h.restart_policy)
                     .and_then(|r| r.name)
                     .map(|n| n.to_string());
-                (normalize_health(raw), normalize_restart_policy(policy))
+                (
+                    normalize_health(raw),
+                    normalize_restart_policy(policy),
+                    code,
+                )
             }
             Ok(Err(err)) => {
                 inspect_failed += 1;
@@ -343,7 +373,7 @@ async fn list_and_collect(
                 if inspect_warns.take() {
                     tracing::warn!(container = %name, %err, reason = "error", "inspect failed");
                 }
-                ("none".to_owned(), "unknown".to_owned())
+                ("none".to_owned(), "unknown".to_owned(), None)
             }
             Err(_) => {
                 inspect_failed += 1;
@@ -351,7 +381,7 @@ async fn list_and_collect(
                 if inspect_warns.take() {
                     tracing::warn!(container = %name, reason = "timeout", "inspect timed out (5s)");
                 }
-                ("none".to_owned(), "unknown".to_owned())
+                ("none".to_owned(), "unknown".to_owned(), None)
             }
         };
 
@@ -378,6 +408,7 @@ async fn list_and_collect(
             state,
             health,
             restart_policy,
+            exit_code,
             cpu_usage_seconds: cpu,
             memory_usage_bytes: mem_usage,
             memory_working_set_bytes: mem_working_set,
@@ -571,7 +602,8 @@ fn extract_blkio(stats: &ContainerStatsResponse, op: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        WarnBudget, buffer_bounded, normalize_health, normalize_restart_policy, should_fetch_stats,
+        WarnBudget, buffer_bounded, is_terminal_state, normalize_health, normalize_restart_policy,
+        should_fetch_stats,
     };
     use crate::config::ExcludeMatcher;
     use std::sync::Arc;
@@ -640,6 +672,25 @@ mod tests {
         // Unknown/absent state must not spend a doomed call either.
         assert!(!should_fetch_stats(""));
         assert!(!should_fetch_stats("Running"));
+    }
+
+    #[test]
+    fn only_finished_containers_have_a_meaningful_exit_code() {
+        // Finished: the process is gone, ExitCode is its verdict.
+        assert!(is_terminal_state("exited"));
+        assert!(is_terminal_state("dead"));
+        // Live: ExitCode is 0 because nothing has exited yet, not because
+        // anything succeeded.
+        assert!(!is_terminal_state("running"));
+        assert!(!is_terminal_state("paused"));
+        // In-between: `created` never ran (ExitCode 0 is meaningless), and
+        // restarting/removing carry a previous run's code mid-transition.
+        assert!(!is_terminal_state("created"));
+        assert!(!is_terminal_state("restarting"));
+        assert!(!is_terminal_state("removing"));
+        // Unknown/absent state must not publish a code either.
+        assert!(!is_terminal_state(""));
+        assert!(!is_terminal_state("Exited"));
     }
 
     #[test]

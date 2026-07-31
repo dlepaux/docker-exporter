@@ -36,6 +36,9 @@ rate(container_network_receive_bytes_total[5m])
 
 # Containers that stopped but shouldn't have (ignores one-shots)
 container_state{restart_policy!="no"} == 0
+
+# One-shot jobs (migrations, batch) that ran and failed
+container_exit_code{restart_policy="no"} != 0
 ```
 
 ::: info Official dashboard
@@ -44,7 +47,7 @@ A ready-made Grafana dashboard is on the roadmap and will be published on grafan
 
 ## Alerting example
 
-Two starter rules: alert when docker-exporter can't reach the Docker daemon, and when a container that shouldn't stop does.
+Three starter rules: alert when docker-exporter can't reach the Docker daemon, when a container that shouldn't stop does, and when a one-shot job exits non-zero. The last one is the complement of the second — `ContainerStopped` has to ignore one-shots (they are *supposed* to sit `Exited`), which leaves their exit code as the only thing that can tell you the job failed.
 
 ```yaml
 groups:
@@ -63,6 +66,13 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Container {{ $labels.name }} is not running"
+
+      - alert: ContainerOneShotFailed
+        expr: container_exit_code{restart_policy="no"} != 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "One-shot {{ $labels.name }} exited {{ $value }}"
 ```
 
 [Why cAdvisor shows zero memory →](/why/cadvisor-arm64-zero-memory) · [docker-exporter vs cAdvisor →](/compare/cadvisor) · [Metrics reference →](/guide/metrics)

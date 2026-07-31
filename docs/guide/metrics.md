@@ -68,11 +68,16 @@ Block I/O metrics emit only after a container reports non-zero bytes — contain
 | Metric                         | Type  | Labels                                              | Description                                              |
 | ------------------------------ | ----- | --------------------------------------------------- | -------------------------------------------------------- |
 | `container_state`              | gauge | `id`, `image`, `name`, `state`, `restart_policy`    | `1` if `state == "running"`, `0` otherwise.              |
+| `container_exit_code`          | gauge | `id`, `image`, `name`, `restart_policy`             | Exit code of a container in a terminal state (`exited`/`dead`). |
 | `container_health_status`      | gauge | `id`, `image`, `name`, `status`                     | `1` for the container's current health `status`.         |
 | `container_start_time_seconds` | gauge | `id`, `image`, `name`                               | Container creation time as a Unix timestamp.             |
 | `container_last_seen`          | gauge | `id`, `image`, `name`                               | Last scrape time as a Unix timestamp.                    |
 
-- **`restart_policy`** lives only on `container_state` — adding it to every family would multiply series counts for no benefit. It lets alerting exclude one-shot containers by label — e.g. select `container_state{restart_policy!="no"}` in a `ContainerStopped` alert instead of maintaining a name denylist.
+- **`restart_policy`** lives only on `container_state` and `container_exit_code` — adding it to every family would multiply series counts for no benefit. It lets alerting exclude one-shot containers by label — e.g. select `container_state{restart_policy!="no"}` in a `ContainerStopped` alert instead of maintaining a name denylist.
+- **`container_exit_code`** is the failure signal for one-shot containers (`restart: "no"` migrations, batch jobs). `container_state` collapses to `0` for anything not running and cannot tell `Exited(0)` from `Exited(1)`, so a job that ran and failed looks exactly like one that ran and succeeded. The value is the raw code — `137` (OOM/`SIGKILL`), `1`, `78` — because the number is the diagnosis.
+  - Emitted **only** for `exited`/`dead` containers. A running container's inspect reports `ExitCode: 0`, and a `created` one has never run; publishing either would read as "succeeded".
+  - **Absent, never `0`, when the inspect fails** — the exporter has no exit code to report and will not invent one. `docker_exporter_inspect_failures_total` is the signal for that case.
+  - The series appears when a one-shot finishes and disappears when the container is replaced, so `container_exit_code{restart_policy="no"} != 0` resolves on redeploy.
 - **`container_health_status`** emits one series per container, with `status` set to the current Docker health (`healthy`, `unhealthy`, `starting`, or `none` when the container has no `HEALTHCHECK`).
 
 ## Endpoints
@@ -101,6 +106,8 @@ container_cpu_usage_seconds_total{id="abc...",image="nginx:alpine",name="web-app
 container_memory_working_set_bytes{id="abc...",image="nginx:alpine",name="web-app"} 37371904
 # TYPE container_state gauge
 container_state{id="abc...",image="nginx:alpine",name="web-app",state="running",restart_policy="unless-stopped"} 1
+# TYPE container_exit_code gauge
+container_exit_code{id="def...",image="myapp/migrate:1.4",name="db-migrate",restart_policy="no"} 1
 # TYPE container_health_status gauge
 container_health_status{id="abc...",image="nginx:alpine",name="web-app",status="healthy"} 1
 ```
