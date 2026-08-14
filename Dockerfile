@@ -1,5 +1,5 @@
 # Stage 1: Build (static musl)
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.85-bookworm@sha256:e51d0265072d2d9d5d320f6a44dde6b9ef13653b035098febd68cce8fa7c0bc4 AS builder
 
 # buildx provides TARGETARCH per native-runner build (amd64 / arm64).
 ARG TARGETARCH
@@ -35,7 +35,7 @@ RUN cargo build --release --target "$(cat /tmp/musl-triple)" --bin docker-export
     && cp "target/$(cat /tmp/musl-triple)/release/docker-exporter" /tmp/docker-exporter
 
 # Stage 2: Runtime (distroless static, non-root)
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a
 
 # Build metadata, baked into OCI labels by CI (defaults are placeholders for
 # local builds where these args are not passed).
