@@ -1,39 +1,76 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", "schedule:weekly", ":automergeMinor", ":automergeDigest"],
-  "labels": ["dependencies"],
+  "extends": [
+    "config:recommended",
+    "schedule:weekly",
+    ":automergeMinor",
+    ":automergeDigest"
+  ],
+  "labels": [
+    "dependencies"
+  ],
   "pinDigests": true,
   "packageRules": [
     {
-      "matchUpdateTypes": ["major"],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "automerge": false,
-      "description": "Major bumps require human review — breaking changes possible"
+      "description": "Major bumps require human review \u2014 breaking changes possible"
     },
     {
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["patch", "minor"],
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
       "groupName": "cargo non-major",
       "description": "Group routine cargo updates to keep PR noise down"
     },
     {
-      "matchManagers": ["dockerfile"],
-      "matchUpdateTypes": ["patch", "minor"],
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
       "groupName": "dockerfile non-major"
     },
     {
-      "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["patch", "minor", "digest"],
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor",
+        "digest"
+      ],
       "groupName": "github-actions non-major",
-      "description": "Group action SHA bumps — pinDigests keeps these flowing"
+      "description": "Group action SHA bumps \u2014 pinDigests keeps these flowing"
+    },
+    {
+      "description": "Security fixes jump the PR queue. prPriority is ONLY valid inside packageRules \u2014 this is the fleet-standard placement (see srv-*/renovate.json).",
+      "matchPackageNames": [
+        "*"
+      ],
+      "isVulnerabilityAlert": true,
+      "prPriority": 10
     }
   ],
   "vulnerabilityAlerts": {
     "enabled": true,
-    "schedule": ["at any time"],
+    "schedule": [
+      "at any time"
+    ],
     "automerge": true,
-    "labels": ["security", "cve"],
-    "prPriority": 10,
-    "description": "Bypass routine schedule and grouping — CVE patches ship within an hour of advisory publication, auto-merged on green CI"
+    "labels": [
+      "security",
+      "cve"
+    ],
+    "description": "Bypass routine schedule and grouping \u2014 CVE patches ship within an hour of advisory publication, auto-merged on green CI. prPriority does NOT belong here: Renovate rejects it under vulnerabilityAlerts and it is the cause of the 'Found renovate config warnings' badge. It lives in packageRules below, matched via isVulnerabilityAlert."
   },
   "osvVulnerabilityAlerts": true
 }
