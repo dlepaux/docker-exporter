@@ -32,7 +32,6 @@
     "schedule": ["at any time"],
     "automerge": true,
     "labels": ["security", "cve"],
-    "prPriority": 10,
     "description": "Bypass routine schedule and grouping — CVE patches ship within an hour of advisory publication, auto-merged on green CI"
   },
   "osvVulnerabilityAlerts": true
