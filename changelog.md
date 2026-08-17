@@ -1,3 +1,10 @@
+## [1.5.1](https://github.com/dlepaux/docker-exporter/compare/v1.5.0...v1.5.1) (2026-08-17)
+
+
+### Bug Fixes
+
+* **renovate:** move prPriority out of vulnerabilityAlerts ([451e03e](https://github.com/dlepaux/docker-exporter/commit/451e03e98f560ad51057507ddcfc3127ab75f179))
+
 # [1.5.0](https://github.com/dlepaux/docker-exporter/compare/v1.4.2...v1.5.0) (2026-07-31)
 
 
