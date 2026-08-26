@@ -4,5 +4,5 @@
 # whatever stable happens to be that week — the drift only ever surfaces as a
 # surprise CI failure on an unrelated PR.
 [toolchain]
-channel = "1.85.0"
+channel = "1.85.1"
 components = ["rustfmt", "clippy"]
