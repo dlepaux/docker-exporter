@@ -1,3 +1,10 @@
+## [1.5.2](https://github.com/dlepaux/docker-exporter/compare/v1.5.1...v1.5.2) (2026-08-26)
+
+
+### Bug Fixes
+
+* **deps:** update cargo non-major ([#17](https://github.com/dlepaux/docker-exporter/issues/17)) ([ca18bd0](https://github.com/dlepaux/docker-exporter/commit/ca18bd05eed988285c999be3d5f8e4eeacb79b12))
+
 ## [1.5.1](https://github.com/dlepaux/docker-exporter/compare/v1.5.0...v1.5.1) (2026-08-17)
 
 
