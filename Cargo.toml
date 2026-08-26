@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = "0.8"
-bollard = "0.20"
+bollard = "0.21"
 futures = "0.3"
 globset = "0.4"
 prometheus = "0.14"
