@@ -1,3 +1,10 @@
+## [1.5.3](https://github.com/dlepaux/docker-exporter/compare/v1.5.2...v1.5.3) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** pin globset to 0.4.19 for rustc 1.86.0 MSRV compatibility ([#39](https://github.com/dlepaux/docker-exporter/issues/39)) ([3422db3](https://github.com/dlepaux/docker-exporter/commit/3422db30ccfade8447a109a8115a26f3845f9941))
+
 ## [1.5.2](https://github.com/dlepaux/docker-exporter/compare/v1.5.1...v1.5.2) (2026-08-26)
 
 
