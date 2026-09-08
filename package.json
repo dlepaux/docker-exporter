@@ -16,6 +16,6 @@
   },
   "overrides": {
     "picomatch": "^4.0.4",
-    "brace-expansion": "^3.0.6"
+    "brace-expansion": "^4.0.0"
   }
 }
