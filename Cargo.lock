@@ -474,9 +474,9 @@ dependencies = [
 
 [[package]]
 name = "globset"
-version = "0.4.19"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e47d37d2ae4464254884b60ab7071be2b876a9c35b696bd018ddcc76847309cd"
+checksum = "07c34a9410465b45bd9787443bc7370f37735bad04b0f0cd57ff1a3186c98988"
 dependencies = [
  "aho-corasick",
  "bstr",
@@ -1421,9 +1421,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.51.2"
+version = "1.51.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc47b623d7b54f74a853595c92b5f5a28dbc58189d42725ab1b868f40d7a2012"
+checksum = "f2d73d634c59fe0e8b7bc66b63528cd9a60e72acb63209b5996d959300845ab1"
 dependencies = [
  "bytes",
  "libc",
@@ -1477,9 +1477,9 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.6.10"
+version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68d6fdd9f81c2819c9a8b0e0cd91660e7746a8e6ea2ba7c6b2b057985f6bcb51"
+checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "bitflags",
  "bytes",
