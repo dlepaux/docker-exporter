@@ -1,5 +1,5 @@
 # Stage 1: Build (static musl)
-FROM rust:1.87-bookworm@sha256:251cec8da4689d180f124ef00024c2f83f79d9bf984e43c180a598119e326b84 AS builder
+FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS builder
 
 # buildx provides TARGETARCH per native-runner build (amd64 / arm64).
 ARG TARGETARCH
