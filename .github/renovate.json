@@ -50,14 +50,6 @@
       ],
       "groupName": "github-actions non-major",
       "description": "Group action SHA bumps \u2014 pinDigests keeps these flowing"
-    },
-    {
-      "description": "Security fixes jump the PR queue. prPriority is ONLY valid inside packageRules \u2014 this is the fleet-standard placement (see srv-*/renovate.json).",
-      "matchPackageNames": [
-        "*"
-      ],
-      "isVulnerabilityAlert": true,
-      "prPriority": 10
     }
   ],
   "vulnerabilityAlerts": {
@@ -70,7 +62,7 @@
       "security",
       "cve"
     ],
-    "description": "Bypass routine schedule and grouping \u2014 CVE patches ship within an hour of advisory publication, auto-merged on green CI. prPriority does NOT belong here: Renovate rejects it under vulnerabilityAlerts and it is the cause of the 'Found renovate config warnings' badge. It lives in packageRules below, matched via isVulnerabilityAlert."
+    "description": "Bypass routine schedule and grouping \u2014 CVE patches ship within an hour of advisory publication, auto-merged on green CI. prPriority does NOT belong here: Renovate rejects it under vulnerabilityAlerts and it is the cause of the 'Found renovate config warnings' badge."
   },
   "osvVulnerabilityAlerts": true
 }
