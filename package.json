@@ -1,6 +1,6 @@
 {
   "name": "docker-exporter",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "private": true,
   "devDependencies": {
     "@semantic-release/changelog": "^7.0.0",

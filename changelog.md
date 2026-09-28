@@ -1,3 +1,10 @@
+## [1.5.4](https://github.com/dlepaux/docker-exporter/compare/v1.5.3...v1.5.4) (2026-09-28)
+
+
+### Bug Fixes
+
+* **collector:** publish no resource series without a stats sample ([dc69214](https://github.com/dlepaux/docker-exporter/commit/dc6921400f936f258edafd0ed4675de6ee9c2c67))
+
 ## [1.5.3](https://github.com/dlepaux/docker-exporter/compare/v1.5.2...v1.5.3) (2026-09-08)
 
 
