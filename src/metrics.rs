@@ -10,7 +10,14 @@ use crate::collector::{ContainerMetrics, ScrapeResult, is_terminal_state};
 /// - Avoid stale metric cleanup (rebuilt from scratch each scrape)
 /// - Have zero shared mutable state
 pub fn encode(result: &ScrapeResult) -> String {
-    let families = build_metric_families(result);
+    // The text encoder rejects a family with no series, and one rejected family
+    // fails the whole encode into an empty body. Dropping empty families keeps
+    // "nothing to report" (no container with a network interface, or with a stats
+    // sample) from blanking every other series, docker_exporter_up included.
+    let families: Vec<MetricFamily> = build_metric_families(result)
+        .into_iter()
+        .filter(|family| !family.get_metric().is_empty())
+        .collect();
     let encoder = TextEncoder::new();
     encoder.encode_to_string(&families).unwrap_or_default()
 }
@@ -69,33 +76,38 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
     for c in &result.containers {
         let base_labels = base_labels(c);
 
-        // CPU — counter (cumulative seconds)
-        cpu_metrics.push(counter_metric(&base_labels, c.cpu_usage_seconds));
+        // Resource series exist only for a real sample. Without one the series is
+        // absent for this scrape (a gap), never a zero: a zero reads as a
+        // measurement, and on the CPU counter as a reset.
+        if let Some(s) = &c.stats {
+            // CPU — counter (cumulative seconds)
+            cpu_metrics.push(counter_metric(&base_labels, s.cpu_usage_seconds));
 
-        // Memory — gauges
-        mem_usage_metrics.push(gauge_metric(&base_labels, c.memory_usage_bytes));
-        mem_working_set_metrics.push(gauge_metric(&base_labels, c.memory_working_set_bytes));
-        mem_cache_metrics.push(gauge_metric(&base_labels, c.memory_cache_bytes));
-        mem_limit_metrics.push(gauge_metric(&base_labels, c.memory_limit_bytes));
+            // Memory — gauges
+            mem_usage_metrics.push(gauge_metric(&base_labels, s.memory_usage_bytes));
+            mem_working_set_metrics.push(gauge_metric(&base_labels, s.memory_working_set_bytes));
+            mem_cache_metrics.push(gauge_metric(&base_labels, s.memory_cache_bytes));
+            mem_limit_metrics.push(gauge_metric(&base_labels, s.memory_limit_bytes));
 
-        // Network — counters per interface
-        for net in &c.network {
-            let mut net_labels = base_labels.clone();
-            net_labels.push(label("interface", &net.interface));
+            // Network — counters per interface
+            for net in &s.network {
+                let mut net_labels = base_labels.clone();
+                net_labels.push(label("interface", &net.interface));
 
-            net_rx_metrics.push(counter_metric(&net_labels, net.rx_bytes));
-            net_tx_metrics.push(counter_metric(&net_labels, net.tx_bytes));
-        }
+                net_rx_metrics.push(counter_metric(&net_labels, net.rx_bytes));
+                net_tx_metrics.push(counter_metric(&net_labels, net.tx_bytes));
+            }
 
-        // Block I/O — counters per operation
-        if c.block_io_read_bytes > 0.0 || c.block_io_write_bytes > 0.0 {
-            let mut read_labels = base_labels.clone();
-            read_labels.push(label("operation", "read"));
-            blkio_metrics.push(counter_metric(&read_labels, c.block_io_read_bytes));
+            // Block I/O — counters per operation
+            if s.block_io_read_bytes > 0.0 || s.block_io_write_bytes > 0.0 {
+                let mut read_labels = base_labels.clone();
+                read_labels.push(label("operation", "read"));
+                blkio_metrics.push(counter_metric(&read_labels, s.block_io_read_bytes));
 
-            let mut write_labels = base_labels.clone();
-            write_labels.push(label("operation", "write"));
-            blkio_metrics.push(counter_metric(&write_labels, c.block_io_write_bytes));
+                let mut write_labels = base_labels.clone();
+                write_labels.push(label("operation", "write"));
+                blkio_metrics.push(counter_metric(&write_labels, s.block_io_write_bytes));
+            }
         }
 
         // State — gauge (1 = running, 0 = other)
@@ -167,13 +179,11 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
         net_tx_metrics,
     ));
 
-    if !blkio_metrics.is_empty() {
-        families.push(counter_family(
-            "container_blkio_device_usage_total",
-            "Cumulative block I/O usage in bytes",
-            blkio_metrics,
-        ));
-    }
+    families.push(counter_family(
+        "container_blkio_device_usage_total",
+        "Cumulative block I/O usage in bytes",
+        blkio_metrics,
+    ));
 
     families.push(gauge_family(
         "container_state",
@@ -185,13 +195,11 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
     // still running (or was never inspectable). The series appears when a
     // one-shot finishes and disappears when the container is replaced — so an
     // alert built on it resolves exactly when the operator redeploys.
-    if !exit_code_metrics.is_empty() {
-        families.push(gauge_family(
-            "container_exit_code",
-            "Exit code of a container in a terminal state (exited/dead); absent while running",
-            exit_code_metrics,
-        ));
-    }
+    families.push(gauge_family(
+        "container_exit_code",
+        "Exit code of a container in a terminal state (exited/dead); absent while running",
+        exit_code_metrics,
+    ));
 
     families.push(gauge_family(
         "container_health_status",
@@ -283,6 +291,7 @@ fn counter_family(name: &str, help: &str, metrics: Vec<Metric>) -> MetricFamily 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collector::ContainerStats;
 
     fn sample_container() -> ContainerMetrics {
         ContainerMetrics {
@@ -295,24 +304,26 @@ mod tests {
             // Docker really does report `ExitCode: 0` for a running container —
             // the fixture keeps that trap in the tests instead of hiding it.
             exit_code: Some(0),
-            cpu_usage_seconds: 42.5,
-            memory_usage_bytes: 104_857_600.0,
-            memory_working_set_bytes: 83_886_080.0,
-            memory_cache_bytes: 20_971_520.0,
-            memory_limit_bytes: 536_870_912.0,
-            network: vec![crate::collector::NetworkMetrics {
-                interface: "eth0".into(),
-                rx_bytes: 1_000_000.0,
-                tx_bytes: 500_000.0,
-                rx_packets: 1000.0,
-                tx_packets: 500.0,
-                rx_errors: 0.0,
-                tx_errors: 0.0,
-                rx_dropped: 0.0,
-                tx_dropped: 0.0,
-            }],
-            block_io_read_bytes: 1_048_576.0,
-            block_io_write_bytes: 524_288.0,
+            stats: Some(ContainerStats {
+                cpu_usage_seconds: 42.5,
+                memory_usage_bytes: 104_857_600.0,
+                memory_working_set_bytes: 83_886_080.0,
+                memory_cache_bytes: 20_971_520.0,
+                memory_limit_bytes: 536_870_912.0,
+                network: vec![crate::collector::NetworkMetrics {
+                    interface: "eth0".into(),
+                    rx_bytes: 1_000_000.0,
+                    tx_bytes: 500_000.0,
+                    rx_packets: 1000.0,
+                    tx_packets: 500.0,
+                    rx_errors: 0.0,
+                    tx_errors: 0.0,
+                    rx_dropped: 0.0,
+                    tx_dropped: 0.0,
+                }],
+                block_io_read_bytes: 1_048_576.0,
+                block_io_write_bytes: 524_288.0,
+            }),
             started_at: 1712400000.0,
             last_seen: 1712403600.0,
         }
@@ -462,10 +473,73 @@ mod tests {
     }
 
     #[test]
+    fn a_family_with_no_series_does_not_blank_the_scrape() {
+        // A container on the host network reports no interfaces, so the network
+        // families have no series. The text encoder rejects an empty family, and
+        // one rejected family used to fail the whole encode into an empty body:
+        // every series gone, docker_exporter_up included, while Prometheus still
+        // recorded the scrape as a success.
+        let mut container = sample_container();
+        container
+            .stats
+            .as_mut()
+            .expect("fixture has a sample")
+            .network = vec![];
+
+        let output = encode_one(container);
+
+        assert!(
+            output.contains("docker_exporter_up 1"),
+            "the scrape was blanked, got:\n{output}"
+        );
+        assert!(output.contains(r#"container_cpu_usage_seconds_total{id="abc123def456""#));
+        assert!(!output.contains("container_network_receive_bytes_total"));
+    }
+
+    #[test]
+    fn no_sample_publishes_no_resource_series() {
+        // A failed or timed-out stats fetch, a container that is not running and
+        // Docker's empty placeholder all leave the collector without a sample.
+        // A zero there reports a measurement that never happened: a CPU counter
+        // reading N, 0, N+δ is a reset to Prometheus, so rate() counts the
+        // container's whole lifetime CPU inside one window (158,194% measured
+        // for a postgres on a 4-core host, 2026-09-23).
+        let container = ContainerMetrics {
+            stats: None,
+            ..sample_container()
+        };
+
+        let output = encode_one(container);
+
+        for family in [
+            "container_cpu_usage_seconds_total",
+            "container_memory_usage_bytes",
+            "container_memory_working_set_bytes",
+            "container_memory_cache",
+            "container_memory_limit_bytes",
+            "container_network_receive_bytes_total",
+            "container_network_transmit_bytes_total",
+            "container_blkio_device_usage_total",
+        ] {
+            assert!(
+                !output.contains(family),
+                "{family} published without a sample, got:\n{output}"
+            );
+        }
+        // The container is still reported: state, health and lifecycle come from
+        // list and inspect, not from stats.
+        assert!(output.contains(r#"container_state{id="abc123def456""#));
+        assert!(output.contains(r#"container_health_status{id="abc123def456""#));
+        assert!(output.contains(r#"container_last_seen{id="abc123def456""#));
+        assert!(output.contains("docker_exporter_up 1"));
+    }
+
+    #[test]
     fn blkio_skipped_when_zero() {
         let mut container = sample_container();
-        container.block_io_read_bytes = 0.0;
-        container.block_io_write_bytes = 0.0;
+        let stats = container.stats.as_mut().expect("fixture has a sample");
+        stats.block_io_read_bytes = 0.0;
+        stats.block_io_write_bytes = 0.0;
 
         let result = ScrapeResult {
             containers: vec![container],

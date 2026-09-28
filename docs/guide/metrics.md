@@ -9,6 +9,8 @@ docker-exporter exposes per-container CPU, memory, network, disk I/O, state, and
 
 All per-container metrics carry the base labels `id`, `image`, and `name`. Some add extra labels, noted below.
 
+Resource series (CPU, memory, network, block I/O) exist only when Docker returns a stats sample. A stopped container, a failed or timed-out fetch, and a container caught mid-restart have none for that scrape: they keep their state, health and lifecycle series, and their resource series are absent. Absent, never `0`: a zero would read as an idle container, and on the cumulative CPU counter as a reset.
+
 ## Exporter
 
 | Metric                                    | Type    | Labels | Description                                          |
@@ -19,10 +21,10 @@ All per-container metrics carry the base labels `id`, `image`, and `name`. Some 
 | `docker_exporter_stats_failures_total`    | counter | —      | Total container-stats fetch failures since start.    |
 
 Alert on both failure counters. `docker_exporter_up` only tells you the daemon
-answered the container *list* — a scrape can be `up` and still be lying. When an
-inspect fails, that container's `health` and `restart_policy` read `unknown`;
-when a stats fetch fails, its cpu/memory/network series report `0` rather than
-disappearing, which is indistinguishable from a genuinely idle container.
+answered the container *list*, so a scrape can be `up` while some containers went
+unread. When an inspect fails, that container's `health` reads `none` and its
+`restart_policy` reads `unknown`. When a stats fetch fails, its resource series
+are absent from that scrape: a gap in the graph, which the counter explains.
 
 ```promql
 rate(docker_exporter_inspect_failures_total[5m]) > 0

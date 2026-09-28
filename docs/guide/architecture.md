@@ -15,9 +15,11 @@ On each `GET /metrics`, the exporter:
 2. For every container, concurrently fetches **stats** (`bollard::stats(stream=false)`) and an **inspect** (health + restart policy + exit code), each with a **5 s timeout**. Containers are processed at a **bounded concurrency of 64**, not all at once.
 3. Encodes the result as Prometheus text.
 
-Stats are skipped for containers that are neither `running` nor `paused`. Docker closes the stats stream empty for them, so the call could only fail, and their CPU/memory series are zero either way — skipping changes no output, it just avoids a doomed request.
+Stats are skipped for containers that are neither `running` nor `paused`: Docker has no sample for them, so they publish no resource series either way, and skipping just avoids a doomed request.
 
-Failed or timed-out calls are logged and counted: **inspect** failures increment `docker_exporter_inspect_failures_total`, **stats** failures increment `docker_exporter_stats_failures_total`. The container is still emitted either way — a stats failure zeroes its CPU/memory/network/block I/O, an inspect failure sets `health="none"`, `restart_policy="unknown"` and drops the container's `container_exit_code` series entirely (rather than reporting a fabricated `0`, which would read as a successful job) — so one bad container never fails the whole scrape. When failures are widespread the per-container log lines are sampled (10 per kind per scrape) and followed by one aggregate line; the counters carry the exact totals.
+A container that stops or restarts between the list and the stats call gets Docker's empty placeholder: HTTP 200, every counter at zero, `read` at `0001-01-01T00:00:00Z`. It is treated as no sample, not as a container at 0 CPU and 0 bytes, and as an expected race it counts no failure.
+
+Failed or timed-out calls are logged and counted: **inspect** failures increment `docker_exporter_inspect_failures_total`, **stats** failures increment `docker_exporter_stats_failures_total`. The container is still emitted either way — a stats failure drops its CPU/memory/network/block I/O series from that scrape rather than reporting zeros (a zero on the cumulative CPU counter reads as a reset, so `rate()` would count the container's whole lifetime CPU in one window), an inspect failure sets `health="none"`, `restart_policy="unknown"` and drops the container's `container_exit_code` series entirely (rather than reporting a fabricated `0`, which would read as a successful job) — so one bad container never fails the whole scrape. When failures are widespread the per-container log lines are sampled (10 per kind per scrape) and followed by one aggregate line; the counters carry the exact totals.
 
 ### Why concurrency is bounded
 

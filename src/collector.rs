@@ -64,6 +64,17 @@ pub struct ContainerMetrics {
     /// terminal-state gate in `metrics.rs` is what decides when it means
     /// anything; `None` means "we don't know", never "0".
     pub exit_code: Option<i64>,
+    /// The container's resource sample, or `None` when there is none to report:
+    /// stats were not fetched (the container is not running), the fetch failed or
+    /// timed out, or Docker answered with its empty placeholder.
+    pub stats: Option<ContainerStats>,
+    pub started_at: f64,
+    pub last_seen: f64,
+}
+
+/// One resource sample read from the Docker stats API.
+#[derive(Debug, Clone)]
+pub struct ContainerStats {
     pub cpu_usage_seconds: f64,
     pub memory_usage_bytes: f64,
     pub memory_working_set_bytes: f64,
@@ -72,8 +83,6 @@ pub struct ContainerMetrics {
     pub network: Vec<NetworkMetrics>,
     pub block_io_read_bytes: f64,
     pub block_io_write_bytes: f64,
-    pub started_at: f64,
-    pub last_seen: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -159,8 +168,9 @@ where
 /// this state.
 ///
 /// Stats are read from live cgroup counters, so only a container with a running
-/// (or frozen-but-live) task has them. For every other state Docker closes the
-/// stats stream empty, which [`fetch_stats`] surfaces as a synthetic 404.
+/// (or frozen-but-live) task has them. For every other state Docker has no sample:
+/// it answers with its empty placeholder (see [`container_stats`]), or closes the
+/// stream empty, which [`fetch_stats`] surfaces as a synthetic 404.
 fn should_fetch_stats(state: &str) -> bool {
     matches!(state, "running" | "paused")
 }
@@ -253,9 +263,9 @@ async fn list_and_collect(
                 .unwrap_or_default();
             let docker = docker.clone();
             async move {
-                // `None` = deliberately not fetched. It yields the same zeroed metrics
-                // as a failed fetch, so skipping a doomed call for a non-running
-                // container changes no output — it only saves a socket and a WARN line.
+                // `None` = deliberately not fetched. A container that is not running
+                // has no sample to fetch, so it publishes no resource series either
+                // way; skipping the doomed call only saves a socket.
                 let stats_fut = async {
                     if should_fetch_stats(&state) {
                         Some(
@@ -385,22 +395,6 @@ async fn list_and_collect(
             }
         };
 
-        let (cpu, mem_usage, mem_working_set, mem_cache, mem_limit, network, bio_read, bio_write) =
-            if let Some(ref stats) = stats {
-                (
-                    extract_cpu_seconds(stats),
-                    extract_memory_usage(stats),
-                    extract_memory_working_set(stats),
-                    extract_memory_cache(stats),
-                    extract_memory_limit(stats),
-                    extract_network(stats),
-                    extract_blkio_read(stats),
-                    extract_blkio_write(stats),
-                )
-            } else {
-                (0.0, 0.0, 0.0, 0.0, 0.0, vec![], 0.0, 0.0)
-            };
-
         metrics.push(ContainerMetrics {
             name,
             id,
@@ -409,14 +403,7 @@ async fn list_and_collect(
             health,
             restart_policy,
             exit_code,
-            cpu_usage_seconds: cpu,
-            memory_usage_bytes: mem_usage,
-            memory_working_set_bytes: mem_working_set,
-            memory_cache_bytes: mem_cache,
-            memory_limit_bytes: mem_limit,
-            network,
-            block_io_read_bytes: bio_read,
-            block_io_write_bytes: bio_write,
+            stats: stats.as_ref().and_then(container_stats),
             started_at: created,
             last_seen: now,
         });
@@ -482,6 +469,33 @@ fn normalize_health(raw: Option<String>) -> String {
         _ => "none",
     }
     .to_owned()
+}
+
+/// The resource sample carried by one stats response, or `None` for Docker's
+/// "no sample" placeholder.
+///
+/// A container that stops or restarts between the list and the stats call gets a
+/// 200 whose counters are all zero and whose `read` is Go's zero time. That is
+/// Docker saying it has nothing to report, not a container at 0 CPU and 0 bytes.
+/// It is an expected race rather than a failure, so it moves no failure counter.
+fn container_stats(stats: &ContainerStatsResponse) -> Option<ContainerStats> {
+    if stats
+        .read
+        .as_deref()
+        .is_none_or(|read| read.starts_with("0001-01-01"))
+    {
+        return None;
+    }
+    Some(ContainerStats {
+        cpu_usage_seconds: extract_cpu_seconds(stats),
+        memory_usage_bytes: extract_memory_usage(stats),
+        memory_working_set_bytes: extract_memory_working_set(stats),
+        memory_cache_bytes: extract_memory_cache(stats),
+        memory_limit_bytes: extract_memory_limit(stats),
+        network: extract_network(stats),
+        block_io_read_bytes: extract_blkio_read(stats),
+        block_io_write_bytes: extract_blkio_write(stats),
+    })
 }
 
 /// CPU usage in cumulative seconds (converted from nanoseconds).
@@ -602,12 +616,51 @@ fn extract_blkio(stats: &ContainerStatsResponse, op: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        WarnBudget, buffer_bounded, is_terminal_state, normalize_health, normalize_restart_policy,
-        should_fetch_stats,
+        WarnBudget, buffer_bounded, container_stats, is_terminal_state, normalize_health,
+        normalize_restart_policy, should_fetch_stats,
     };
     use crate::config::ExcludeMatcher;
+    use bollard::models::ContainerStatsResponse;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Captured from Docker 29 (`GET /containers/{id}/stats?stream=false`, cgroup
+    // v2): a running container, and the placeholder Docker answers for one that
+    // is not running.
+    const RUNNING_STATS: &str = include_str!("../testdata/docker-stats-running.json");
+    const PLACEHOLDER_STATS: &str = include_str!("../testdata/docker-stats-placeholder.json");
+
+    fn parse(json: &str) -> ContainerStatsResponse {
+        serde_json::from_str(json).expect("fixture is a Docker stats payload")
+    }
+
+    #[test]
+    fn docker_placeholder_is_not_a_sample() {
+        // A container that stops or restarts between the list and the stats call
+        // gets this placeholder: HTTP 200, every counter at zero. Read as data it
+        // reports a live container at 0 CPU and 0 bytes, and the fetch counts as
+        // a success, so no failure counter moves either.
+        assert!(container_stats(&parse(PLACEHOLDER_STATS)).is_none());
+    }
+
+    #[test]
+    fn running_sample_maps_every_field() {
+        let stats =
+            container_stats(&parse(RUNNING_STATS)).expect("a running container has a sample");
+
+        // Expected values read by hand from the fixture.
+        assert_eq!(stats.cpu_usage_seconds, 0.033_544); // total_usage 33_544_000 ns
+        assert_eq!(stats.memory_usage_bytes, 3_272_704.0);
+        assert_eq!(stats.memory_cache_bytes, 49_152.0); // cgroup v2 inactive_file
+        assert_eq!(stats.memory_working_set_bytes, 3_223_552.0); // usage − inactive_file
+        assert_eq!(stats.memory_limit_bytes, 8_215_117_824.0);
+        assert_eq!(stats.block_io_read_bytes, 1_679_360.0);
+        assert_eq!(stats.block_io_write_bytes, 0.0);
+        assert_eq!(stats.network.len(), 1);
+        assert_eq!(stats.network[0].interface, "eth0");
+        assert_eq!(stats.network[0].rx_bytes, 872.0);
+        assert_eq!(stats.network[0].tx_bytes, 126.0);
+    }
 
     /// The load-bearing regression test for the 2026-07-09 log flood: an
     /// unbounded fan-out opened ~2N sockets at once, hit the 1024 fd ceiling,

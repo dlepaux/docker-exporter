@@ -19,7 +19,7 @@ The exporter calls `docker.ping()` at startup and exits non-zero if it fails. Th
 
 - **Excluded by pattern.** `EXCLUDE_CONTAINERS` matches on the container name (without the leading `/`); values are comma-separated and glob-aware. A pattern like `cache-*` can catch it unintentionally — plain names match exactly. See [Configuration](/guide/configuration#excluding-containers).
 - **Not scraped yet.** The container was created after the last scrape and Prometheus hasn't pulled yet — wait one scrape interval.
-- **Daemon not reporting it.** Stopped containers **do** appear, with `container_state{...} 0` and zero stats. If you see nothing at all, the daemon isn't returning it from `/containers/json?all=true`.
+- **Daemon not reporting it.** Stopped containers **do** appear, in `container_state{...} 0` and the health and lifecycle series, but with no CPU, memory, network or block I/O series: there is no sample to report. If you see nothing at all, the daemon isn't returning it from `/containers/json?all=true`.
 
 ## Why does memory differ from `docker stats`?
 

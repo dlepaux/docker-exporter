@@ -1,0 +1,45 @@
+{
+  "id": "1bcff24c41a87ec987f22fdf95b449f14de6844249f65f8f9fa31d8c5c9857bc",
+  "name": "/de-probe-created",
+  "os_type": "linux",
+  "read": "0001-01-01T00:00:00Z",
+  "cpu_stats": {
+    "cpu_usage": {
+      "total_usage": 0,
+      "usage_in_kernelmode": 0,
+      "usage_in_usermode": 0
+    },
+    "throttling_data": {
+      "periods": 0,
+      "throttled_periods": 0,
+      "throttled_time": 0
+    }
+  },
+  "memory_stats": {},
+  "pids_stats": {},
+  "blkio_stats": {
+    "io_service_bytes_recursive": null,
+    "io_serviced_recursive": null,
+    "io_queue_recursive": null,
+    "io_service_time_recursive": null,
+    "io_wait_time_recursive": null,
+    "io_merged_recursive": null,
+    "io_time_recursive": null,
+    "sectors_recursive": null
+  },
+  "num_procs": 0,
+  "storage_stats": {},
+  "preread": "0001-01-01T00:00:00Z",
+  "precpu_stats": {
+    "cpu_usage": {
+      "total_usage": 0,
+      "usage_in_kernelmode": 0,
+      "usage_in_usermode": 0
+    },
+    "throttling_data": {
+      "periods": 0,
+      "throttled_periods": 0,
+      "throttled_time": 0
+    }
+  }
+}
