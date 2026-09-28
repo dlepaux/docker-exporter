@@ -47,7 +47,7 @@ A ready-made Grafana dashboard is on the roadmap and will be published on grafan
 
 ## Alerting example
 
-Three starter rules: alert when docker-exporter can't reach the Docker daemon, when a container that shouldn't stop does, and when a one-shot job exits non-zero. The last one is the complement of the second — `ContainerStopped` has to ignore one-shots (they are *supposed* to sit `Exited`), which leaves their exit code as the only thing that can tell you the job failed.
+Four starter rules: alert when docker-exporter can't reach the Docker daemon, when a container that shouldn't stop does, when a one-shot job exits non-zero, and when a container keeps restarting. The third is the complement of the second — `ContainerStopped` has to ignore one-shots (they are *supposed* to sit `Exited`), which leaves their exit code as the only thing that can tell you the job failed.
 
 ```yaml
 groups:
@@ -73,6 +73,14 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "One-shot {{ $labels.name }} exited {{ $value }}"
+
+      - alert: ContainerRestarting
+        expr: changes(container_start_time_seconds[1h]) > 3
+        labels: { severity: warning }
+        annotations:
+          summary: "Container {{ $labels.name }} restarted {{ $value }} times in the last hour"
 ```
+
+`container_start_time_seconds` moves on every start, a manual `docker restart` included, so `changes(container_start_time_seconds[1h]) > 0` catches a single restart.
 
 [Why cAdvisor shows zero memory →](/why/cadvisor-arm64-zero-memory) · [docker-exporter vs cAdvisor →](/compare/cadvisor) · [Metrics reference →](/guide/metrics)

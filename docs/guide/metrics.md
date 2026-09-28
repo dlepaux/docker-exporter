@@ -72,7 +72,8 @@ Block I/O metrics emit only after a container reports non-zero bytes — contain
 | `container_state`              | gauge | `id`, `image`, `name`, `state`, `restart_policy`    | `1` if `state == "running"`, `0` otherwise.              |
 | `container_exit_code`          | gauge | `id`, `image`, `name`, `restart_policy`             | Exit code of a container in a terminal state (`exited`/`dead`). |
 | `container_health_status`      | gauge | `id`, `image`, `name`, `status`                     | `1` for the container's current health `status`.         |
-| `container_start_time_seconds` | gauge | `id`, `image`, `name`                               | Container creation time as a Unix timestamp.             |
+| `container_start_time_seconds` | gauge | `id`, `image`, `name`                               | When the container last started, as a Unix timestamp.    |
+| `container_creation_time_seconds` | gauge | `id`, `image`, `name`                            | When the container was created, as a Unix timestamp.     |
 | `container_last_seen`          | gauge | `id`, `image`, `name`                               | Last scrape time as a Unix timestamp.                    |
 
 - **`restart_policy`** lives only on `container_state` and `container_exit_code` — adding it to every family would multiply series counts for no benefit. It lets alerting exclude one-shot containers by label — e.g. select `container_state{restart_policy!="no"}` in a `ContainerStopped` alert instead of maintaining a name denylist.
@@ -81,6 +82,9 @@ Block I/O metrics emit only after a container reports non-zero bytes — contain
   - **Absent, never `0`, when the inspect fails** — the exporter has no exit code to report and will not invent one. `docker_exporter_inspect_failures_total` is the signal for that case.
   - The series appears when a one-shot finishes and disappears when the container is replaced, so `container_exit_code{restart_policy="no"} != 0` resolves on redeploy.
 - **`container_health_status`** emits one series per container, with `status` set to the current Docker health (`healthy`, `unhealthy`, `starting`, or `none` when the container has no `HEALTHCHECK`).
+- **`container_start_time_seconds`** is Docker's `State.StartedAt`, so it moves on every start, manual `docker restart` included, and `changes()` over it counts restarts. A container that never started reports its creation time, as cAdvisor does.
+  - **Absent when the inspect fails.** Falling back to the creation time would flip the series and back, which `changes()` would count as two restarts.
+  - Up to v1.5.4 this metric carried the creation time. That value now lives in **`container_creation_time_seconds`**, which never moves; cAdvisor splits the two the same way.
 
 ## Endpoints
 

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bollard::Docker;
-use bollard::models::{ContainerNetworkStats, ContainerStatsResponse};
+use bollard::models::{ContainerNetworkStats, ContainerState, ContainerStatsResponse};
 use bollard::query_parameters::{ListContainersOptionsBuilder, StatsOptionsBuilder};
 use futures::stream::{self, StreamExt};
 
@@ -68,7 +68,11 @@ pub struct ContainerMetrics {
     /// stats were not fetched (the container is not running), the fetch failed or
     /// timed out, or Docker answered with its empty placeholder.
     pub stats: Option<ContainerStats>,
-    pub started_at: f64,
+    /// When the container was created, from the container list.
+    pub created_at: f64,
+    /// When it last started (see [`start_time`]), or `None` when the inspect
+    /// failed and there is no honest value to report.
+    pub started_at: Option<f64>,
     pub last_seen: f64,
 }
 
@@ -349,15 +353,17 @@ async fn list_and_collect(
 
         // Health from inspect. HealthStatusEnum impls Display (like ContainerSummaryStateEnum
         // used for `state` above) → .to_string() yields the API value; normalize it.
-        // Health, restart policy and exit code all come from the SAME inspect
-        // response — no extra API call, no extra socket. restart_policy lets the
-        // alerting layer exclude intentional one-shots (restart:no) by label
-        // instead of a hand-curated name blacklist. On inspect FAILURE → "unknown"
-        // (never "no"): an unknown policy must still alert (fail-safe), never
-        // silently exempt a real crashed service. The exit code degrades the same
-        // way, to `None` — a fabricated 0 would read as "the one-shot succeeded",
-        // which is the confidently-wrong answer.
-        let (health, restart_policy, exit_code) = match inspect_result {
+        // Health, restart policy, exit code and start time all come from the SAME
+        // inspect response — no extra API call, no extra socket. restart_policy
+        // lets the alerting layer exclude intentional one-shots (restart:no) by
+        // label instead of a hand-curated name blacklist. On inspect FAILURE →
+        // "unknown" (never "no"): an unknown policy must still alert (fail-safe),
+        // never silently exempt a real crashed service. The exit code degrades the
+        // same way, to `None` — a fabricated 0 would read as "the one-shot
+        // succeeded", which is the confidently-wrong answer. So does the start
+        // time: falling back to the creation time would flip the series and back,
+        // which `changes()` counts as two restarts.
+        let (health, restart_policy, exit_code, started_at) = match inspect_result {
             Ok(Ok(inspect)) => {
                 let inspect_state = inspect.state;
                 let raw = inspect_state
@@ -365,6 +371,7 @@ async fn list_and_collect(
                     .and_then(|s| s.health.as_ref())
                     .and_then(|h| h.status)
                     .map(|st| st.to_string());
+                let started_at = start_time(inspect_state.as_ref(), created);
                 let code = inspect_state.and_then(|s| s.exit_code);
                 let policy = inspect
                     .host_config
@@ -375,6 +382,7 @@ async fn list_and_collect(
                     normalize_health(raw),
                     normalize_restart_policy(policy),
                     code,
+                    Some(started_at),
                 )
             }
             Ok(Err(err)) => {
@@ -383,7 +391,7 @@ async fn list_and_collect(
                 if inspect_warns.take() {
                     tracing::warn!(container = %name, %err, reason = "error", "inspect failed");
                 }
-                ("none".to_owned(), "unknown".to_owned(), None)
+                ("none".to_owned(), "unknown".to_owned(), None, None)
             }
             Err(_) => {
                 inspect_failed += 1;
@@ -391,7 +399,7 @@ async fn list_and_collect(
                 if inspect_warns.take() {
                     tracing::warn!(container = %name, reason = "timeout", "inspect timed out (5s)");
                 }
-                ("none".to_owned(), "unknown".to_owned(), None)
+                ("none".to_owned(), "unknown".to_owned(), None, None)
             }
         };
 
@@ -404,7 +412,8 @@ async fn list_and_collect(
             restart_policy,
             exit_code,
             stats: stats.as_ref().and_then(container_stats),
-            started_at: created,
+            created_at: created,
+            started_at,
             last_seen: now,
         });
     }
@@ -496,6 +505,39 @@ fn container_stats(stats: &ContainerStatsResponse) -> Option<ContainerStats> {
         block_io_read_bytes: extract_blkio_read(stats),
         block_io_write_bytes: extract_blkio_write(stats),
     })
+}
+
+/// When the container last started, as cAdvisor reports it: Docker's
+/// `State.StartedAt`, or the creation time for a container that never started.
+/// A restart moves it; the creation time never moves.
+fn start_time(state: Option<&ContainerState>, created: f64) -> f64 {
+    state
+        .and_then(|state| state.started_at.as_deref())
+        .and_then(parse_docker_time)
+        .map_or(created, |started| started as f64)
+}
+
+/// Unix seconds of a Docker timestamp, RFC 3339 in UTC such as
+/// `2026-09-18T05:22:25.185315001Z`, or `None` for anything else. That includes
+/// Go's zero time, which Docker writes as `StartedAt` for a container that never
+/// started. Whole seconds, like cAdvisor: the fraction is dropped.
+fn parse_docker_time(s: &str) -> Option<i64> {
+    let (date, time) = s.strip_suffix('Z')?.split_once('T')?;
+    let mut date = date.splitn(3, '-').map(|part| part.parse::<i64>().ok());
+    let (year, month, day) = (date.next()??, date.next()??, date.next()??);
+    let mut time = time.split('.').next()?.splitn(3, ':');
+    let mut field = || time.next()?.parse::<i64>().ok();
+    let (hour, minute, second) = (field()?, field()?, field()?);
+    if year < 1970 || !(1..=12).contains(&month) {
+        return None;
+    }
+    // Days since 1970-01-01, by Howard Hinnant's days_from_civil.
+    let y = if month <= 2 { year - 1 } else { year };
+    let (era, year_of_era) = (y.div_euclid(400), y.rem_euclid(400));
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
 /// CPU usage in cumulative seconds (converted from nanoseconds).
@@ -617,10 +659,10 @@ fn extract_blkio(stats: &ContainerStatsResponse, op: &str) -> f64 {
 mod tests {
     use super::{
         WarnBudget, buffer_bounded, container_stats, is_terminal_state, normalize_health,
-        normalize_restart_policy, should_fetch_stats,
+        normalize_restart_policy, parse_docker_time, should_fetch_stats, start_time,
     };
     use crate::config::ExcludeMatcher;
-    use bollard::models::ContainerStatsResponse;
+    use bollard::models::{ContainerState, ContainerStatsResponse};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -632,6 +674,68 @@ mod tests {
 
     fn parse(json: &str) -> ContainerStatsResponse {
         serde_json::from_str(json).expect("fixture is a Docker stats payload")
+    }
+
+    // `docker inspect` State, captured from Docker 29: a container restarted four
+    // seconds after it was created, and one that was created but never started.
+    const RESTARTED_STATE: &str = include_str!("../testdata/docker-state-restarted.json");
+    const NEVER_STARTED_STATE: &str = include_str!("../testdata/docker-state-never-started.json");
+    /// Created 2026-09-28T17:52:10Z, as the container list reports it.
+    const CREATED: f64 = 1_790_617_930.0;
+
+    fn state(json: &str) -> ContainerState {
+        serde_json::from_str(json).expect("fixture is a Docker container State")
+    }
+
+    #[test]
+    fn start_time_moves_with_a_restart() {
+        // Up to v1.5.3 the start time stayed at the creation time after a
+        // restart, so nothing built on it could see one.
+        let restarted = state(RESTARTED_STATE);
+        assert_eq!(start_time(Some(&restarted), CREATED), 1_790_617_934.0); // StartedAt 17:52:14Z
+    }
+
+    #[test]
+    fn a_container_that_never_started_reports_its_creation_time() {
+        // Docker writes Go's zero time as StartedAt. cAdvisor falls back to the
+        // creation time there, and so does this exporter.
+        let never_started = state(NEVER_STARTED_STATE);
+        assert_eq!(start_time(Some(&never_started), CREATED), CREATED);
+    }
+
+    #[test]
+    fn docker_timestamps_parse_to_whole_unix_seconds() {
+        // Expected values checked with `date -u`. The first two are a container's
+        // Created and State.StartedAt from a real `docker inspect`.
+        assert_eq!(
+            parse_docker_time("2026-09-02T04:48:27.26070062Z"),
+            Some(1_788_324_507)
+        );
+        assert_eq!(
+            parse_docker_time("2026-09-18T05:22:25.185315001Z"),
+            Some(1_789_708_945)
+        );
+        assert_eq!(
+            parse_docker_time("2024-02-29T12:00:00Z"),
+            Some(1_709_208_000)
+        ); // leap day
+        assert_eq!(
+            parse_docker_time("2100-03-01T00:00:00Z"),
+            Some(4_107_542_400)
+        ); // 2100 is not leap
+        assert_eq!(parse_docker_time("1970-01-01T00:00:00Z"), Some(0));
+    }
+
+    #[test]
+    fn unusable_docker_timestamps_are_none() {
+        // Go's zero time: what Docker writes as StartedAt for a container that
+        // never started. Reading it as a date would put the start in year 1.
+        assert_eq!(parse_docker_time("0001-01-01T00:00:00Z"), None);
+        assert_eq!(parse_docker_time(""), None);
+        assert_eq!(parse_docker_time("yesterday"), None);
+        assert_eq!(parse_docker_time("2026-13-01T00:00:00Z"), None);
+        // Docker writes UTC. An offset would be misread as UTC, so refuse it.
+        assert_eq!(parse_docker_time("2026-09-18T07:22:25+02:00"), None);
     }
 
     #[test]

@@ -71,6 +71,7 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
     let mut exit_code_metrics = Vec::new();
     let mut health_metrics = Vec::new();
     let mut start_time_metrics = Vec::new();
+    let mut creation_time_metrics = Vec::new();
     let mut last_seen_metrics = Vec::new();
 
     for c in &result.containers {
@@ -136,8 +137,12 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
         health_labels.push(label("status", &c.health));
         health_metrics.push(gauge_metric(&health_labels, 1.0));
 
-        // Lifecycle — gauges
-        start_time_metrics.push(gauge_metric(&base_labels, c.started_at));
+        // Lifecycle — gauges. No start time without an inspect (see
+        // `ContainerMetrics::started_at`).
+        creation_time_metrics.push(gauge_metric(&base_labels, c.created_at));
+        if let Some(started_at) = c.started_at {
+            start_time_metrics.push(gauge_metric(&base_labels, started_at));
+        }
         last_seen_metrics.push(gauge_metric(&base_labels, c.last_seen));
     }
 
@@ -208,8 +213,13 @@ fn build_metric_families(result: &ScrapeResult) -> Vec<MetricFamily> {
     ));
     families.push(gauge_family(
         "container_start_time_seconds",
-        "Container creation time as Unix timestamp",
+        "When the container last started (its creation time if it never started), as a Unix timestamp",
         start_time_metrics,
+    ));
+    families.push(gauge_family(
+        "container_creation_time_seconds",
+        "Container creation time as a Unix timestamp",
+        creation_time_metrics,
     ));
     families.push(gauge_family(
         "container_last_seen",
@@ -324,7 +334,9 @@ mod tests {
                 block_io_read_bytes: 1_048_576.0,
                 block_io_write_bytes: 524_288.0,
             }),
-            started_at: 1712400000.0,
+            created_at: 1712400000.0,
+            // Restarted ten minutes after it was created.
+            started_at: Some(1712400600.0),
             last_seen: 1712403600.0,
         }
     }
@@ -535,6 +547,43 @@ mod tests {
     }
 
     #[test]
+    fn start_time_is_the_last_start_and_creation_time_has_its_own_series() {
+        // As in cAdvisor since 2026-03: the start time moves on every start, so
+        // changes() over it counts restarts; the creation time never moves.
+        let output = encode_one(sample_container());
+
+        assert!(
+            output.contains(
+                r#"container_start_time_seconds{id="abc123def456",image="myimage:latest",name="my-app"} 1712400600"#
+            ),
+            "start time must be the last start, got:\n{output}"
+        );
+        assert!(
+            output.contains(
+                r#"container_creation_time_seconds{id="abc123def456",image="myimage:latest",name="my-app"} 1712400000"#
+            ),
+            "creation time must keep its own series, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn start_time_absent_when_inspect_failed() {
+        // Without an inspect there is no start time to report. Falling back to
+        // the creation time would flip the series and back, which changes()
+        // counts as two restarts of a container that never restarted.
+        let output = encode_one(ContainerMetrics {
+            started_at: None,
+            ..sample_container()
+        });
+
+        assert!(
+            !output.contains("container_start_time_seconds"),
+            "no start time without an inspect, got:\n{output}"
+        );
+        assert!(output.contains(r#"container_creation_time_seconds{id="abc123def456""#));
+    }
+
+    #[test]
     fn blkio_skipped_when_zero() {
         let mut container = sample_container();
         let stats = container.stats.as_mut().expect("fixture has a sample");
@@ -585,6 +634,7 @@ mod tests {
             "container_state",
             "container_exit_code",
             "container_start_time_seconds",
+            "container_creation_time_seconds",
             "container_last_seen",
             "container_health_status",
             "docker_exporter_inspect_failures_total",
