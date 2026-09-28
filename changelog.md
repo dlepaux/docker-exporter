@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/dlepaux/docker-exporter/compare/v1.5.4...v1.6.0) (2026-09-28)
+
+
+### Features
+
+* **metrics:** make container_start_time_seconds follow restarts ([776eb84](https://github.com/dlepaux/docker-exporter/commit/776eb84565c94aa702c01181473720880a899913))
+
 ## [1.5.4](https://github.com/dlepaux/docker-exporter/compare/v1.5.3...v1.5.4) (2026-09-28)
 
 
