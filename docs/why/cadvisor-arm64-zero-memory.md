@@ -12,10 +12,6 @@ head:
 
 **Short answer:** the Raspberry Pi kernel boots with its memory cgroup controller disabled, so nothing can read per-container memory: `docker stats`, cAdvisor and docker-exporter all show zero. Add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt` and reboot. That one flag fixes every tool, cAdvisor included.
 
-::: info Correction, 2026-09-28
-This page used to say that cAdvisor keeps reporting zero memory on a Pi 5 even after memory cgroups are enabled, and that this was why docker-exporter exists. A test on a Raspberry Pi 5 showed otherwise: with memory cgroups on, cAdvisor reads memory correctly ([results below](#does-cadvisor-work-once-memory-cgroups-are-on)). The upstream report, [cAdvisor #3469](https://github.com/google/cadvisor/issues/3469), is this same boot setting: a commenter saw `docker stats` at zero as well, and a Pi 5 user got memory back after adding the flag. What docker-exporter changes is the footprint and the privileges, not the memory numbers.
-:::
-
 ## The cause: the memory cgroup is off at boot
 
 The Raspberry Pi kernel's default command line, inherited from the device tree, carries `cgroup_disable=memory`. The kernel then keeps no per-container memory accounting, and every tool that reads it reports zero.
@@ -51,13 +47,15 @@ Yes. Tested on 2026-09-28 on a Raspberry Pi 5 (Raspberry Pi kernel 6.18, Docker 
 
 The small differences come from when each read happened. cAdvisor v0.55.1 gave the same picture (vector 30.6 MB, node-exporter 20.1 MB).
 
+The upstream report, [cAdvisor #3469](https://github.com/google/cadvisor/issues/3469), is this same boot setting: a commenter saw `docker stats` at zero as well, and a Pi 5 user got memory back after adding the flag.
+
 If cAdvisor still shows nothing after you enable memory cgroups, check its version before its memory: v0.47.2, the version in #3469, can't identify containers on Docker 29 and publishes no per-container series at all (its log says `failed to identify the read-write layer ID`). Current releases are published as `ghcr.io/google/cadvisor`.
 
 One more trap from the same thread: a dashboard that sums memory over every cAdvisor series counts the machine twice, because cAdvisor also exports the root cgroup. Filter to containers, for example `{name!=""}`.
 
 ## Where docker-exporter fits
 
-It doesn't fix a zero: nothing can until the kernel accounts memory. Once it does, docker-exporter and cAdvisor report the same working set. What docker-exporter changes is the cost of getting it. On the same Pi 5 it used 7 to 13 times less CPU than cAdvisor and 5 to 8 times less memory, and it needs no privileged mode, only the Docker socket, read-only ([benchmark →](/why/benchmark)).
+It doesn't fix a zero: nothing can until the kernel accounts memory. Once it does, docker-exporter and cAdvisor report the same working set. What docker-exporter changes is the cost of getting it. Measured side by side on two ARM64 hosts, it used 7 to 30 times less CPU than cAdvisor and 5 to 84 times less memory, and it needs no privileged mode, only the Docker socket, read-only ([benchmark →](/why/benchmark)).
 
 ```bash
 docker run -d \

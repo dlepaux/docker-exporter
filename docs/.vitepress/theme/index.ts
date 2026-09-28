@@ -1,9 +1,11 @@
 import DefaultTheme from "vitepress/theme";
 import "./custom.css";
+import FootprintChart from "./FootprintChart.vue";
 
 export default {
   extends: DefaultTheme,
-  enhanceApp({ router }) {
+  enhanceApp({ app, router }) {
+    app.component("FootprintChart", FootprintChart);
     // Client-only: gtag's config sends the first page_view, but VitePress is an
     // SPA, so client-side navigations don't reload the page — report them to GA4.
     if (import.meta.env.SSR) return;

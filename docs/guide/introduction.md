@@ -11,7 +11,7 @@ It reads the Docker stats API directly, computes the memory working set the way 
 
 ## The problem it solves
 
-cAdvisor monitors the whole host, which is a lot of machinery for a single-board computer. It runs privileged with five host mounts and keeps walking the cgroup tree on a timer, whether anyone scrapes it or not. On a Raspberry Pi 5 with seven containers it used 0.87 to 1.72% of a core and 22.5 to 35.6 MiB, depending on its housekeeping interval, against docker-exporter's 0.13% and 4.2 MiB, for the same numbers ([full footprint benchmark →](/why/benchmark)). On this project's busier hosts it averaged 9 to 17% CPU, though with a flag that made it heavier.
+cAdvisor monitors the whole host, which is a lot of machinery for a single-board computer. It runs privileged with five host mounts and keeps walking the cgroup tree on a timer, whether anyone scrapes it or not. On a quiet Raspberry Pi 5 it used 0.87 to 1.72% of a core and 22.5 to 35.6 MiB, depending on its housekeeping interval, against docker-exporter's 0.13% and 4.2 MiB. On a busy Rock 5B+ with 37 containers it used 10.5 to 20.4% and 128 to 429 MiB, against docker-exporter's 0.67% and 5.1 MiB, for the same numbers ([full footprint benchmark →](/why/benchmark)).
 
 ::: tip Memory reads zero on a Raspberry Pi?
 That's the Pi's boot configuration, not a bug in any exporter. The memory cgroup is disabled at boot, so `docker stats`, cAdvisor and docker-exporter all read zero until you add `cgroup_enable=memory`. [How to fix it →](/why/cadvisor-arm64-zero-memory)
