@@ -5,7 +5,7 @@ description: "Every docker-exporter metric for ARM64 + cgroup v2 hosts: CPU, mem
 
 # Docker metrics reference (ARM64 + cgroup v2)
 
-docker-exporter exposes per-container CPU, memory, network, disk I/O, state, and health as Prometheus text at `/metrics` — including `container_memory_working_set_bytes` computed correctly on ARM64 + cgroup v2 (Raspberry Pi 5). Metric names are cAdvisor-compatible, so existing Grafana dashboards work unchanged.
+docker-exporter exposes per-container CPU, memory, network, disk I/O, state, and health as Prometheus text at `/metrics` — including `container_memory_working_set_bytes`, computed the way `docker stats` does on cgroup v1 and v2. Metric names are cAdvisor-compatible, so most existing Grafana dashboards work unchanged.
 
 All per-container metrics carry the base labels `id`, `image`, and `name`. Some add extra labels, noted below.
 
@@ -46,7 +46,7 @@ rate(docker_exporter_stats_failures_total[5m]) > 0
 | `container_memory_cache`             | gauge | `id`, `image`, `name` | Cache: `inactive_file` (v2), `cache` (v1).          |
 | `container_memory_limit_bytes`       | gauge | `id`, `image`, `name` | Memory limit in bytes.                                       |
 
-`container_memory_working_set_bytes` is the metric cAdvisor reports as **zero** on ARM64 + cgroup v2 — a known upstream bug ([cAdvisor #3469](https://github.com/google/cadvisor/issues/3469), closed *"not planned"* 2025-12-09). It matches what `docker stats` reports. [Why cAdvisor gets it wrong →](/why/cadvisor-arm64-zero-memory)
+`container_memory_working_set_bytes` matches what `docker stats` reports. It reads zero only when the host isn't accounting memory, which is the Raspberry Pi default: [enable memory cgroups →](/why/cadvisor-arm64-zero-memory)
 
 See the [full docker-exporter vs. cAdvisor comparison →](/compare/cadvisor) for footprint and metric-coverage differences.
 

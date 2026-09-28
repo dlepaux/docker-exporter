@@ -1,11 +1,11 @@
 ---
 title: Prometheus & Grafana
-description: Scrape docker-exporter with Prometheus and Grafana on ARM64 / Raspberry Pi 5 — scrape config, alerting rules, and dashboards that finally read memory correctly.
+description: Scrape docker-exporter with Prometheus and Grafana on ARM64 / Raspberry Pi 5 — scrape config, alerting rules, and dashboards.
 ---
 
 # Prometheus & Grafana
 
-**docker-exporter speaks cAdvisor's metric language**, so if you already run Prometheus and Grafana you can wire it in without rebuilding dashboards. On ARM64 / Raspberry Pi 5 it also makes memory panels stop reading zero — the result of an [unfixed cAdvisor bug (#3469)](/why/cadvisor-arm64-zero-memory) this exporter sidesteps.
+**docker-exporter speaks cAdvisor's metric language**, so if you already run Prometheus and Grafana you can wire it in without rebuilding dashboards.
 
 ## Prometheus scrape config
 
@@ -20,12 +20,12 @@ A 15 s scrape interval is fine for container metrics (Prometheus's own built-in 
 
 ## Grafana dashboards and PromQL queries
 
-docker-exporter uses [**cAdvisor-compatible metric names**](/compare/cadvisor) (`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, `container_network_receive_bytes_total`, …). Most existing cAdvisor/Docker Grafana dashboards work against it with little or no query changes — name-keyed panels are drop-in, while panels keyed on cAdvisor-only labels (the per-core `cpu` label, or a cgroup-path `id`) may need minor edits. On ARM64 / Raspberry Pi 5 the memory panels finally show real numbers instead of zero.
+docker-exporter uses [**cAdvisor-compatible metric names**](/compare/cadvisor) (`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, `container_network_receive_bytes_total`, …). Most existing cAdvisor/Docker Grafana dashboards work against it with little or no query changes — name-keyed panels are drop-in, while panels keyed on cAdvisor-only labels (the per-core `cpu` label, or a cgroup-path `id`) may need minor edits. Health is the exception: docker-exporter publishes `container_health_status` with a `status` label, where cAdvisor has `container_health_state`, so health panels need their query rewritten.
 
 A few queries to start from:
 
 ```promql
-# Working set per container (the number cAdvisor zeroes on ARM64)
+# Working set per container (what docker stats shows)
 container_memory_working_set_bytes
 
 # CPU cores used per container (rate of the cumulative counter)
@@ -83,4 +83,4 @@ groups:
 
 `container_start_time_seconds` moves on every start, a manual `docker restart` included, so `changes(container_start_time_seconds[1h]) > 0` catches a single restart.
 
-[Why cAdvisor shows zero memory →](/why/cadvisor-arm64-zero-memory) · [docker-exporter vs cAdvisor →](/compare/cadvisor) · [Metrics reference →](/guide/metrics)
+[Why memory reads zero on a Pi →](/why/cadvisor-arm64-zero-memory) · [docker-exporter vs cAdvisor →](/compare/cadvisor) · [Metrics reference →](/guide/metrics)

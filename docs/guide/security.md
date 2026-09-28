@@ -12,7 +12,7 @@ docker-exporter exposes Docker metrics with the smallest reasonable blast radius
 - **Read-only socket.** The Docker socket is mounted `:ro` and the exporter only issues read calls (`list`, `inspect`, `stats`). It never creates, starts, stops, or execs into containers.
 - **Non-root.** Runs as UID **65532** (the distroless `nonroot` user) — not root, inside or outside the container.
 - **No privileged mode.** Unlike [cAdvisor](/compare/cadvisor), it needs no `--privileged` and no bind mounts of `/proc`, `/sys`, or the cgroup filesystem. The Docker socket is its only host dependency.
-- **Minimal image.** A single static musl binary on `distroless/static` — no shell, no package manager, ~9 MB of attack surface.
+- **Minimal image.** A single static musl binary on `distroless/static` — no shell, no package manager, ~10 MB of attack surface.
 
 ## Is read-only socket access actually safe?
 

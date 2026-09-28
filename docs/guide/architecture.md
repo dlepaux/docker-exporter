@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: "docker-exporter's architecture: no background loop, per-scrape stats, and cgroup v2-aware working set math — the calculation cAdvisor gets wrong on ARM64."
+description: "docker-exporter's architecture: no background loop, per-scrape stats, and cgroup v2-aware working set math that matches docker stats."
 ---
 
 # Architecture
@@ -38,7 +38,7 @@ The working set is computed at exposition time from the Docker stats payload:
 - **cgroup v2:** `max(0, usage − inactive_file)`
 - **cgroup v1:** `max(0, usage − cache)`
 
-This is the calculation cAdvisor gets wrong on ARM64 + cgroup v2, where it reports zero — [cAdvisor #3469](https://github.com/google/cadvisor/issues/3469), closed *"not planned"* on 2025-12-09. [Why cAdvisor reports zero memory on ARM64 →](/why/cadvisor-arm64-zero-memory)
+It matches what `docker stats` reports. If it reads zero on a Raspberry Pi, the kernel isn't accounting memory: [enable memory cgroups →](/why/cadvisor-arm64-zero-memory)
 
 ## State across scrapes
 
@@ -46,8 +46,8 @@ The Prometheus output is rebuilt from scratch each scrape as `MetricFamily` prot
 
 ## Footprint
 
-- **Memory:** ~7–10 MiB idle, ~10–20 MiB scraping ~30 containers.
-- **CPU:** near-zero at rest; a scrape's work scales with container count and daemon latency, but steady-state stays **under 1%** on a Raspberry Pi 5.
-- **Image:** ~9 MB — a static musl binary on `distroless/static`, non-root, identical on `linux/amd64` and `linux/arm64`.
+- **Memory:** 2–10 MiB per host on 9 production hosts running up to 36 containers (7-day medians, September 2026), peaking at 14 MiB.
+- **CPU:** near-zero at rest; a scrape's work scales with container count and daemon latency, but steady-state stays **under 1%** of a core: 0.08–0.54% on the same 9 hosts.
+- **Image:** ~10 MB unpacked, 3.4 MB to pull (arm64, 1.6.0) — a static musl binary on `distroless/static`, non-root, built for `linux/amd64` and `linux/arm64`.
 
 See the [footprint benchmark →](/why/benchmark) for the methodology and numbers versus cAdvisor, or the [full docker-exporter vs cAdvisor comparison →](/compare/cadvisor) for a feature-by-feature breakdown.

@@ -8,7 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const SITE = "https://docker-exporter.tech";
 const DESCRIPTION =
-  "A tiny Rust Prometheus exporter for Docker container metrics. Correct memory working set on ARM64 & cgroup v2 (Raspberry Pi 5), ~7 MiB RAM, ~9 MB image, read-only socket, non-root.";
+  "A tiny Rust Prometheus exporter for Docker container metrics, built for ARM64 & cgroup v2 (Raspberry Pi 5): ~7 MiB RAM, ~10 MB image, read-only socket, non-root.";
 const OG_IMAGE = `${SITE}/og-share.png`;
 const REPO = "https://github.com/dlepaux/docker-exporter";
 const GA_ID = "G-BPJLP0VFFB"; // GA4 Measurement ID — public / client-side by design.
@@ -239,7 +239,7 @@ export default defineConfig({
         {
           text: "Background",
           items: [
-            { text: "The cAdvisor ARM64 memory bug", link: "/why/cadvisor-arm64-zero-memory" },
+            { text: "Why memory reads zero on a Pi", link: "/why/cadvisor-arm64-zero-memory" },
             { text: "Footprint benchmark", link: "/why/benchmark" },
           ],
         },
@@ -253,7 +253,7 @@ export default defineConfig({
         {
           text: "Background",
           items: [
-            { text: "The cAdvisor ARM64 memory bug", link: "/why/cadvisor-arm64-zero-memory" },
+            { text: "Why memory reads zero on a Pi", link: "/why/cadvisor-arm64-zero-memory" },
             { text: "Footprint benchmark", link: "/why/benchmark" },
           ],
         },

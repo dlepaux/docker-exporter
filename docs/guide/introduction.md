@@ -1,25 +1,25 @@
 ---
 title: ARM64 & Raspberry Pi 5 Docker Metrics Exporter
-description: docker-exporter — ARM64 & Raspberry Pi 5 Docker metrics for Prometheus. A Rust exporter that fixes cAdvisor's zero-memory bug on cgroup v2, ~7 MiB RAM.
+description: docker-exporter — ARM64 & Raspberry Pi 5 Docker metrics for Prometheus. A ~7 MiB Rust exporter with cAdvisor-compatible metric names and no privileged mode.
 ---
 
 # docker-exporter for ARM64 & Raspberry Pi 5
 
 **docker-exporter** is a [Prometheus](https://prometheus.io/) exporter for Docker container metrics, written in Rust and built for ARM64 homelabs running cgroup v2.
 
-It reads the Docker stats API directly, computes the memory working set correctly on both cgroup versions, and idles around **7 MiB of RAM**. Metric names are cAdvisor-compatible, so existing Prometheus scrape configs and Grafana dashboards work without a rewrite.
+It reads the Docker stats API directly, computes the memory working set the way `docker stats` does on both cgroup versions, and idles around **7 MiB of RAM**. Metric names are cAdvisor-compatible, so existing Prometheus scrape configs and most Grafana dashboards work without a rewrite.
 
 ## The problem it solves
 
-On a Raspberry Pi 5 (ARM64 + cgroup v2), cAdvisor returns **zero** for `container_memory_working_set_bytes`, so memory dashboards silently break — part of cAdvisor's broader ARM-side pain ([#2523](https://github.com/google/cadvisor/issues/2523)).
+cAdvisor monitors the whole host, which is a lot of machinery for a single-board computer. It runs privileged with five host mounts and keeps walking the cgroup tree on a timer, whether anyone scrapes it or not. On a Raspberry Pi 5 with four containers it used 1.07% of a core and 19 to 29 MiB, against docker-exporter's 0.10% and 7.4 MiB, for the same numbers ([full footprint benchmark →](/why/benchmark)). On this project's busier hosts it averaged 9 to 17% CPU.
 
-This is upstream-acknowledged and unfixed: [cAdvisor #3469](https://github.com/google/cadvisor/issues/3469) was closed *"not planned"* on 2025-12-09, and it persists **even after** you enable memory cgroups on the Pi. [Read the full cAdvisor ARM64 zero-memory bug story →](/why/cadvisor-arm64-zero-memory)
-
-cAdvisor's footprint is also large for a single-board computer: 9–17% sustained CPU, ~80–150 MiB RAM per host, privileged mode, and six mounted host paths — because it monitors the whole host, not just Docker ([full footprint benchmark →](/why/benchmark)).
+::: tip Memory reads zero on a Raspberry Pi?
+That's the Pi's boot configuration, not a bug in any exporter. The memory cgroup is disabled at boot, so `docker stats`, cAdvisor and docker-exporter all read zero until you add `cgroup_enable=memory`. [How to fix it →](/why/cadvisor-arm64-zero-memory)
+:::
 
 ## What you get
 
-- **Correct memory working set** on cgroup v1 *and* v2 (`usage − inactive_file` on v2, `usage − cache` on v1).
+- **Memory working set** as `docker stats` computes it, on cgroup v1 *and* v2 (`usage − inactive_file` on v2, `usage − cache` on v1).
 - Per-container **CPU, memory, network, and block I/O**, plus state, health, and lifecycle metrics.
 - A **read-only** Docker socket and **non-root** execution (UID 65532, no privileged mode).
 - **On-demand collection** — no background polling; each scrape fetches stats with a 5 s per-container timeout.
@@ -30,7 +30,7 @@ cAdvisor's footprint is also large for a single-board computer: 9–17% sustaine
 
 `docker-exporter` is purpose-built for one job: per-container Docker metrics. cAdvisor monitors much more (host, processes, OOM events, hardware counters).
 
-- **Use docker-exporter** if you already run Prometheus + Grafana and either hit the ARM64/cgroup v2 memory bug or want a tiny-footprint cAdvisor alternative on an SBC.
+- **Use docker-exporter** if you already run Prometheus + Grafana and want a small-footprint, unprivileged cAdvisor alternative on an SBC.
 - **Keep cAdvisor** if you need host/process metrics and its footprint isn't a problem.
 
 See the [full docker-exporter vs cAdvisor comparison →](/compare/cadvisor).

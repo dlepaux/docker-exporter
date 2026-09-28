@@ -68,7 +68,7 @@ curl -s http://localhost:9713/metrics | head
 curl -s http://localhost:9713/health   # -> 200 ok
 ```
 
-If `container_memory_working_set_bytes` reads zero in `/metrics`, that's a host cgroup-v2 / Raspberry Pi config issue (memory cgroups disabled by default), not this exporter — see [Why cAdvisor shows zero memory on Raspberry Pi 5](/why/cadvisor-arm64-zero-memory).
+If `container_memory_working_set_bytes` reads zero in `/metrics`, that's a host cgroup-v2 / Raspberry Pi config issue (memory cgroups disabled by default), not this exporter — see [Why memory reads zero on a Raspberry Pi 5](/why/cadvisor-arm64-zero-memory).
 
 `docker ps` also shows a health status — the image's `HEALTHCHECK` runs the binary with `--health`, a TCP liveness probe to its own port on loopback (no shell, no wget). It only confirms the server is listening, though; the `/health` endpoint is what verifies the Docker daemon is reachable.
 
@@ -76,5 +76,5 @@ If `container_memory_working_set_bytes` reads zero in `/metrics`, that's a host 
 
 - [Configuration](/guide/configuration) — bind address, log level, container exclusion.
 - [Prometheus & Grafana](/guide/prometheus-grafana) — scrape configuration and dashboards.
-- [Why cAdvisor shows zero memory on Raspberry Pi 5](/why/cadvisor-arm64-zero-memory) — if you're migrating from cAdvisor and memory metrics look wrong.
-- [docker-exporter vs cAdvisor](/compare/cadvisor) — footprint and correctness comparison if you're evaluating both.
+- [Why memory reads zero on a Raspberry Pi 5](/why/cadvisor-arm64-zero-memory) — if memory metrics read zero, whichever exporter you run.
+- [docker-exporter vs cAdvisor](/compare/cadvisor) — footprint and scope comparison if you're evaluating both.

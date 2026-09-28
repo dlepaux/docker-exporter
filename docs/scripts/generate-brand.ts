@@ -94,7 +94,7 @@ function buildOg(): string {
   <!-- stat strip -->
   <g font-family="ui-monospace, 'SF Mono', Menlo, 'DejaVu Sans Mono', monospace">
     <text x="370" y="408" font-size="26" fill="#94a3b8">~7 MiB RAM</text>
-    <text x="568" y="408" font-size="26" fill="#94a3b8">~9 MB image</text>
+    <text x="568" y="408" font-size="26" fill="#94a3b8">~10 MB image</text>
     <text x="768" y="408" font-size="26" fill="#94a3b8">read-only socket</text>
   </g>
 

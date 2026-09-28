@@ -1,61 +1,63 @@
 ---
-title: "Raspberry Pi 5 (ARM64 + cgroup v2): cAdvisor shows zero memory"
-description: cAdvisor reports zero memory on Raspberry Pi 5 (ARM64 + cgroup v2) — one fixed with cgroup_enable=memory, one an unfixed cAdvisor bug (#3469). How to tell them apart and fix both.
+title: "Raspberry Pi 5: why container memory reads zero"
+description: On a Raspberry Pi 5, container memory reads zero in docker stats, cAdvisor and every exporter until memory cgroups are enabled. One kernel flag, cgroup_enable=memory, fixes all of them.
 head:
   - - script
     - type: application/ld+json
     - |-
-      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Why does cAdvisor show zero memory on a Raspberry Pi 5?","acceptedAnswer":{"@type":"Answer","text":"Two separate causes. First, Raspberry Pi OS ships with the memory cgroup controller disabled by default, so no tool can read memory until you add cgroup_enable=memory to /boot/firmware/cmdline.txt and reboot. Second, even after that, cAdvisor still mis-reports container_memory_working_set_bytes on ARM64 with cgroup v2 — an upstream bug (cAdvisor #3469) closed as 'not planned'."}},{"@type":"Question","name":"What is the correct flag to enable memory cgroups on Raspberry Pi OS?","acceptedAnswer":{"@type":"Answer","text":"Add cgroup_enable=memory to /boot/firmware/cmdline.txt and reboot. The older cgroup_memory=1 cgroup_enable=memory form from 2022-era guides is no longer needed; cgroup_enable=memory alone is correct on current Raspberry Pi OS."}},{"@type":"Question","name":"Will Raspberry Pi OS ever enable memory cgroups by default?","acceptedAnswer":{"@type":"Answer","text":"No. The Raspberry Pi kernel team has confirmed memory cgroups are intentionally available but disabled by default and must be opted into. This is a deliberate, permanent decision, so the requirement is evergreen."}},{"@type":"Question","name":"How do I fix cAdvisor's zero memory on ARM64?","acceptedAnswer":{"@type":"Answer","text":"If memory is still zero or wrong after enabling memory cgroups, it's cAdvisor bug #3469, not a config error. Use docker-exporter, which reads the Docker stats API directly and computes the working set correctly on cgroup v2 (usage minus inactive_file)."}}]}
+      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Why does container memory show zero on a Raspberry Pi 5?","acceptedAnswer":{"@type":"Answer","text":"The Raspberry Pi kernel boots with the memory cgroup controller disabled (cgroup_disable=memory is on its default command line), so docker stats, cAdvisor and every exporter read zero. Add cgroup_enable=memory to /boot/firmware/cmdline.txt and reboot."}},{"@type":"Question","name":"What is the correct flag to enable memory cgroups on Raspberry Pi OS?","acceptedAnswer":{"@type":"Answer","text":"Add cgroup_enable=memory to /boot/firmware/cmdline.txt, on the existing single line, and reboot. cgroup_memory=1 is not needed: the kernel applies the flags in order, and cmdline.txt comes after the default cgroup_disable=memory."}},{"@type":"Question","name":"Will Raspberry Pi OS ever enable memory cgroups by default?","acceptedAnswer":{"@type":"Answer","text":"No. The Raspberry Pi kernel team's stated preference is to keep the memory cgroup available but disabled by default, and a request to enable it by default in Raspberry Pi OS Lite was closed as not planned in April 2026."}},{"@type":"Question","name":"Does cAdvisor read memory correctly on a Raspberry Pi 5 once memory cgroups are enabled?","acceptedAnswer":{"@type":"Answer","text":"Yes. On a Raspberry Pi 5 with Docker 29.8.1, cAdvisor v0.55.1 and v0.60.6 reported the same working set as docker-exporter (tested 2026-09-28). cAdvisor v0.47.2 is too old for Docker 29 and reports no containers at all."}}]}
 ---
 
-# Why cAdvisor shows zero memory on Raspberry Pi 5 (ARM64 + cgroup v2)
+# Why container memory reads zero on a Raspberry Pi 5
 
-**Short answer:** there are *two* separate causes, and most guides only cover the first. (1) Raspberry Pi OS ships with the memory cgroup controller **disabled by default**, so no tool can read container memory until you enable it. (2) Even after you enable it, **cAdvisor still mis-reports** `container_memory_working_set_bytes` on ARM64 + cgroup v2 — a known, unfixed upstream bug. Below: how to tell which one you're hitting, and how to fix both.
+**Short answer:** the Raspberry Pi kernel boots with its memory cgroup controller disabled, so nothing can read per-container memory: `docker stats`, cAdvisor and docker-exporter all show zero. Add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt` and reboot. That one flag fixes every tool, cAdvisor included.
 
-## Layer 1 — memory cgroups are disabled by default
+::: info Correction, 2026-09-28
+This page used to say that cAdvisor keeps reporting zero memory on a Pi 5 even after memory cgroups are enabled, and that this was why docker-exporter exists. A test on a Raspberry Pi 5 showed otherwise: with memory cgroups on, cAdvisor reads memory correctly ([results below](#does-cadvisor-work-once-memory-cgroups-are-on)). The upstream report, [cAdvisor #3469](https://github.com/google/cadvisor/issues/3469), is this same boot setting: a commenter saw `docker stats` at zero as well, and a Pi 5 user got memory back after adding the flag. What docker-exporter changes is the footprint and the privileges, not the memory numbers.
+:::
 
-Out of the box, Raspberry Pi OS boots with the kernel's memory cgroup controller disabled. `docker stats` and every exporter (cAdvisor included) then read **zero** memory, because the kernel isn't accounting it.
+## The cause: the memory cgroup is off at boot
 
-Fix it by adding one flag to `/boot/firmware/cmdline.txt` (all on the existing single line) and rebooting:
+The Raspberry Pi kernel's default command line, inherited from the device tree, carries `cgroup_disable=memory`. The kernel then keeps no per-container memory accounting, and every tool that reads it reports zero.
+
+This is deliberate. The Raspberry Pi kernel team's stated preference is to have the memory cgroup "available but disabled by default" ([raspberrypi/linux#6980](https://github.com/raspberrypi/linux/issues/6980#issuecomment-3149752155)), and a request to enable it by default in Raspberry Pi OS Lite was closed as not planned in April 2026 ([pi-gen#917](https://github.com/RPi-Distro/pi-gen/issues/917)). Expect to set it yourself on every Pi.
+
+## The fix: one flag
+
+Add this to `/boot/firmware/cmdline.txt`, on the existing single line, and reboot:
 
 ```
 cgroup_enable=memory
 ```
 
-::: warning Use the current flag
-Older (2022-era) tutorials tell you to add `cgroup_memory=1 cgroup_enable=memory`. On current Raspberry Pi OS, **`cgroup_enable=memory` alone is correct** — and cgroup **v1** reporting was dropped entirely in Linux kernel 6.12+, so v2-only guidance now applies.
-:::
+`cgroup_memory=1`, which older guides also add, isn't needed. The kernel applies the flags in the order they appear, and `cmdline.txt` comes after the default `cgroup_disable=memory`, so yours wins: `/proc/cmdline` shows both, the disable first and your enable after it.
 
-Confirm it took effect after reboot:
+Raspberry Pi kernels from 6.12 are also built without cgroup v1 memory support, so `memory` no longer appears in `/proc/cgroups`. Check the cgroup v2 controller list instead:
 
 ```bash
-docker info | grep -i memory        # should NOT say "WARNING: No memory limit support"
-cat /sys/fs/cgroup/memory.current   # a real number, not missing
+cat /sys/fs/cgroup/cgroup.controllers   # lists "memory"
+docker info | grep -i "memory limit"    # prints nothing: no "No memory limit support" warning
 ```
 
-This requirement is **not going away**. The Raspberry Pi kernel maintainers confirm memory cgroups are *intentionally* disabled by default and must be opted in ([raspberrypi/linux#6980](https://github.com/raspberrypi/linux/issues/6980)) — reconfirmed on the 2026 Raspberry Pi OS "Trixie" release ([pi-gen#917](https://github.com/RPi-Distro/pi-gen/issues/917)). Enabling memory cgroups is a permanent step, not a temporary one.
+## Does cAdvisor work once memory cgroups are on?
 
-## Layer 2 — cAdvisor still gets it wrong on ARM64 + cgroup v2
+Yes. Tested on 2026-09-28 on a Raspberry Pi 5 (Raspberry Pi kernel 6.18, Docker 29.8.1, cgroup v2, `cgroup_enable=memory`), with cAdvisor started from its README command plus `--docker_only=true`. Both exporters read `container_memory_working_set_bytes` within the same minute:
 
-Here's the part almost no article covers. After you enable memory cgroups, `docker stats` shows correct numbers — but **cAdvisor still reports `container_memory_working_set_bytes` as zero** on Raspberry Pi 5 (ARM64 + cgroup v2).
-
-This is an upstream bug, not your configuration: [cAdvisor #3469 — *"Memory Usage always zero"* (HW: Raspberry Pi 5)](https://github.com/google/cadvisor/issues/3469) was closed **"not planned"** on 2025-12-09. A commenter who had already applied the `cgroup_enable=memory` fix still saw incorrect memory readings. Broader ARM-side pain is tracked in [cAdvisor #2523](https://github.com/google/cadvisor/issues/2523). cAdvisor isn't sized or maintained for single-board ARM homelabs.
-
-## How to tell which layer you're at
-
-| Symptom | Cause | Fix |
+| Container | cAdvisor v0.60.6 | docker-exporter 1.6.0 |
 | --- | --- | --- |
-| `docker stats` **and** cAdvisor both show zero memory | Layer 1 — cgroups disabled | Add `cgroup_enable=memory`, reboot |
-| `docker stats` correct, but cAdvisor shows zero / wrong | Layer 2 — cAdvisor ARM64 bug | Use docker-exporter |
+| vector | 28.7 MB | 28.7 MB |
+| node-exporter | 19.0 MB | 19.5 MB |
+| image-update-exporter | 6.2 MB | 5.2 MB |
 
-## The fix: read the stats API directly
+The small differences come from when each read happened. cAdvisor v0.55.1 gave the same picture (vector 30.6 MB, node-exporter 20.1 MB).
 
-`docker-exporter` sidesteps Layer 2 entirely. It reads the Docker stats API directly and computes the working set using the kernel's own definition:
+If cAdvisor still shows nothing after you enable memory cgroups, check its version before its memory: v0.47.2, the version in #3469, can't identify containers on Docker 29 and publishes no per-container series at all (its log says `failed to identify the read-write layer ID`). Current releases are published as `ghcr.io/google/cadvisor`.
 
-- **cgroup v2:** `usage − inactive_file`
-- **cgroup v1:** `usage − cache`
+One more trap from the same thread: a dashboard that sums memory over every cAdvisor series counts the machine twice, because cAdvisor also exports the root cgroup. Filter to containers, for example `{name!=""}`.
 
-It uses the same metric name as cAdvisor (`container_memory_working_set_bytes`), so your Grafana panels light up again — with real numbers instead of zero. It runs in ~7 MiB of RAM ([full footprint benchmark →](/why/benchmark)), read-only on the socket, non-root.
+## Where docker-exporter fits
+
+It doesn't fix a zero: nothing can until the kernel accounts memory. Once it does, docker-exporter and cAdvisor report the same working set. What docker-exporter changes is the cost of getting it. On the same Pi 5 it used about a tenth of cAdvisor's CPU and less than half its memory, and it needs no privileged mode, only the Docker socket, read-only ([benchmark →](/why/benchmark)).
 
 ```bash
 docker run -d \
@@ -69,23 +71,20 @@ docker run -d \
 
 ## FAQ
 
-### Why does cAdvisor show zero memory on a Raspberry Pi 5?
-Two separate causes. First, Raspberry Pi OS ships with the memory cgroup controller **disabled by default**, so no tool can read container memory until you add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt` and reboot. Second, even after that, cAdvisor still mis-reports `container_memory_working_set_bytes` on ARM64 with cgroup v2 — upstream bug [#3469](https://github.com/google/cadvisor/issues/3469), closed **"not planned"**.
+### Why does container memory show zero on a Raspberry Pi 5?
+The Raspberry Pi kernel boots with the memory cgroup controller disabled (`cgroup_disable=memory` is on its default command line), so `docker stats`, cAdvisor and every exporter read zero. Add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt` and reboot.
 
 ### What is the correct flag to enable memory cgroups on Raspberry Pi OS?
-Add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt` (on the existing single line) and reboot. The older `cgroup_memory=1 cgroup_enable=memory` form from 2022-era guides is no longer needed — `cgroup_enable=memory` alone is correct on current Raspberry Pi OS.
+`cgroup_enable=memory` in `/boot/firmware/cmdline.txt`, on the existing single line, then reboot. `cgroup_memory=1` is not needed: the kernel applies the flags in order, and `cmdline.txt` comes after the default `cgroup_disable=memory`.
 
 ### Will Raspberry Pi OS ever enable memory cgroups by default?
-No. The Raspberry Pi kernel team has confirmed memory cgroups are *intentionally* available but disabled by default and must be opted into ([raspberrypi/linux#6980](https://github.com/raspberrypi/linux/issues/6980)). It's a deliberate, permanent decision, so the requirement is evergreen.
+No. The Raspberry Pi kernel team's stated preference is to keep the memory cgroup available but disabled by default ([raspberrypi/linux#6980](https://github.com/raspberrypi/linux/issues/6980#issuecomment-3149752155)), and a request to enable it by default in Raspberry Pi OS Lite was closed as not planned in April 2026 ([pi-gen#917](https://github.com/RPi-Distro/pi-gen/issues/917)).
 
-### How do I fix cAdvisor's zero memory on ARM64?
-If memory is still zero or wrong after enabling memory cgroups, it's cAdvisor bug [#3469](https://github.com/google/cadvisor/issues/3469), not a config error. Use `docker-exporter`, which reads the Docker stats API directly and computes the working set correctly on cgroup v2 (`usage − inactive_file`).
+### Does cAdvisor read memory correctly on a Raspberry Pi 5 once memory cgroups are enabled?
+Yes. On a Raspberry Pi 5 with Docker 29.8.1, cAdvisor v0.55.1 and v0.60.6 reported the same working set as docker-exporter (tested 2026-09-28, [results above](#does-cadvisor-work-once-memory-cgroups-are-on)). cAdvisor v0.47.2 is too old for Docker 29 and reports no containers at all.
 
 ### Is this the same as the "No memory limit support" warning?
-That warning is Layer 1 (cgroups disabled). Fix it with `cgroup_enable=memory`. If memory is still wrong *after* the warning is gone, you're at Layer 2.
+Yes. Docker prints that warning when the memory cgroup is unavailable, and the same flag makes it go away.
 
-### Does enabling memory cgroups cost performance?
-A small, fixed amount of kernel memory accounting overhead — negligible on a Pi 5, and required for any per-container memory metrics.
-
-### Why not just patch cAdvisor?
-The upstream issue is closed **"not planned,"** and cAdvisor's architecture walks the whole host/kernel/hardware topology by design — heavy for a single-board computer. A purpose-built exporter is the smaller, durable fix.
+### Does enabling memory cgroups cost anything?
+The kernel then accounts memory for every cgroup. Before changing the default, Raspberry Pi's maintainers asked for evidence that this costs nothing for users who don't need it ([pi-gen#917](https://github.com/RPi-Distro/pi-gen/issues/917)). Any per-container memory metric does need it.

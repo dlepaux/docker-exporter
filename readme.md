@@ -4,11 +4,13 @@
 
 # docker-exporter
 
-A tiny **Prometheus exporter for Docker container metrics**, written in Rust for ARM64 homelabs running cgroup v2 — and the fix for cAdvisor's **zero-memory bug on Raspberry Pi 5**.
+A tiny **Prometheus exporter for Docker container metrics**, written in Rust for ARM64 homelabs running cgroup v2: about **7 MiB of RAM**, well under **1% CPU**, and no privileged mode.
 
 📖 **Full documentation: [docker-exporter.tech](https://docker-exporter.tech)**
 
-cAdvisor reports zero for `container_memory_working_set_bytes` on Raspberry Pi 5 (ARM64 + cgroup v2) — a [known, upstream-unfixed bug](https://github.com/google/cadvisor/issues/3469). `docker-exporter` reads the Docker stats API directly, computes the working set correctly on both cgroup versions, talks to the socket **read-only**, runs **non-root**, and idles around **7 MiB of RAM**. Metric names are cAdvisor-compatible, so existing Grafana dashboards work unchanged.
+`docker-exporter` reads the Docker stats API when Prometheus scrapes, instead of walking the host's cgroups on a timer. It computes the working set the way `docker stats` does on both cgroup versions, talks to the socket **read-only** and runs **non-root**. On the same Raspberry Pi 5 it used about a tenth of cAdvisor's CPU and less than half its memory for the same container numbers ([benchmark](https://docker-exporter.tech/why/benchmark)). Metric names are cAdvisor-compatible, so most existing Grafana dashboards work unchanged.
+
+Memory reading zero on a Raspberry Pi? That's the Pi's boot configuration, and it affects every tool, cAdvisor and this one alike: [one kernel flag fixes it](https://docker-exporter.tech/why/cadvisor-arm64-zero-memory).
 
 ## Quick start
 
@@ -25,8 +27,8 @@ Then scrape `http://localhost:9713/metrics`. Image is published for `linux/amd64
 
 ## Why docker-exporter
 
-- **Correct memory working set** on cgroup v1 **and** v2 (`usage − inactive_file` on v2, `usage − cache` on v1) — the number cAdvisor zeroes on ARM64.
-- **~9 MB image, ~7 MiB RAM, < 1% CPU** — a single static binary on distroless.
+- **Memory working set** as `docker stats` computes it, on cgroup v1 **and** v2 (`usage − inactive_file` on v2, `usage − cache` on v1).
+- **~10 MB image (3.4 MB to pull), ~7 MiB RAM, < 1% CPU** — a single static binary on distroless.
 - **Read-only** Docker socket, **non-root** (UID 65532), no privileged mode.
 - **On-demand** collection — no background loop; 5 s per-container timeout.
 - Per-container CPU, memory, network, block I/O, state, health, and lifecycle metrics.
@@ -38,7 +40,7 @@ Everything lives at **[docker-exporter.tech](https://docker-exporter.tech)**:
 
 - [Installation](https://docker-exporter.tech/guide/installation) · [Configuration](https://docker-exporter.tech/guide/configuration) · [Metrics reference](https://docker-exporter.tech/guide/metrics)
 - [Prometheus & Grafana](https://docker-exporter.tech/guide/prometheus-grafana) · [Architecture](https://docker-exporter.tech/guide/architecture) · [Troubleshooting](https://docker-exporter.tech/guide/troubleshooting)
-- [Why cAdvisor breaks on Raspberry Pi 5](https://docker-exporter.tech/why/cadvisor-arm64-zero-memory) · [docker-exporter vs cAdvisor](https://docker-exporter.tech/compare/cadvisor)
+- [Why memory reads zero on a Raspberry Pi 5](https://docker-exporter.tech/why/cadvisor-arm64-zero-memory) · [Footprint benchmark](https://docker-exporter.tech/why/benchmark) · [docker-exporter vs cAdvisor](https://docker-exporter.tech/compare/cadvisor)
 
 ## Development
 

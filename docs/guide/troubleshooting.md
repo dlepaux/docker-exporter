@@ -28,7 +28,7 @@ The exporter calls `docker.ping()` at startup and exits non-zero if it fails. Th
 - `container_memory_usage_bytes` exposes the **raw** usage including cache.
 - `container_memory_working_set_bytes` matches what `docker stats` reports.
 
-Any remaining difference after that is usually one scrape window of drift. If working set reads **zero** on a Raspberry Pi, memory cgroups are disabled on the host — the default on Raspberry Pi OS. docker-exporter reads the Docker stats API and computes the working set itself, so it reports zero only when the kernel isn't accounting memory at all, never because of an exporter bug; add `cgroup_enable=memory` and reboot to fix it. cAdvisor carries a *separate* defect on top of this — [cAdvisor #3469, "Memory Usage always zero"](https://github.com/google/cadvisor/issues/3469), closed "not planned" on 2025-12-09 — which persists even after cgroups are enabled. That second layer is why this exporter exists: see the [full ARM64 zero-memory breakdown](/why/cadvisor-arm64-zero-memory) and the [docker-exporter vs cAdvisor comparison](/compare/cadvisor).
+Any remaining difference after that is usually one scrape window of drift. If working set reads **zero** on a Raspberry Pi, memory cgroups are disabled on the host — the default on Raspberry Pi OS. docker-exporter reads the Docker stats API and computes the working set itself, so it reports zero only when the kernel isn't accounting memory at all, never because of an exporter bug; add `cgroup_enable=memory` and reboot to fix it. The same flag fixes cAdvisor: once memory cgroups are on, it reads memory correctly too ([the cause and the fix](/why/cadvisor-arm64-zero-memory)).
 
 ## Scrape duration is high (> 3 s)
 
