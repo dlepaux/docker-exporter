@@ -8,28 +8,28 @@ const pi = {
   cpu: [
     { label: "docker-exporter 1.6.0", value: 0.13, highlight: true },
     { label: "cAdvisor, defaults", value: 1.72 },
-    { label: "cAdvisor, 15 s housekeeping", value: 0.87 },
+    { label: "cAdvisor, tuned (15 s interval)", value: 0.87 },
   ],
   ram: [
     { label: "docker-exporter 1.6.0", value: 4.2, highlight: true },
     { label: "cAdvisor, defaults", value: 35.6 },
-    { label: "cAdvisor, 15 s housekeeping", value: 22.5 },
+    { label: "cAdvisor, tuned (15 s interval)", value: 22.5 },
   ],
 };
 const rock = {
   cpu: [
     { label: "docker-exporter 1.6.0", value: 0.67, highlight: true },
     { label: "cAdvisor, defaults", value: 20.36 },
-    { label: "cAdvisor, 15 s housekeeping", value: 10.53 },
+    { label: "cAdvisor, tuned (15 s interval)", value: 10.53 },
   ],
   ram: [
     { label: "docker-exporter 1.6.0", value: 5.1, highlight: true },
     { label: "cAdvisor, defaults", value: 428.6 },
-    { label: "cAdvisor, 15 s housekeeping", value: 127.9 },
+    { label: "cAdvisor, tuned (15 s interval)", value: 127.9 },
   ],
 };
 const trap = [
-  { label: "15 s housekeeping", value: 10.53 },
+  { label: "tuned (15 s interval)", value: 10.53 },
   { label: "+ socket collectors (tcp, udp, advtcp)", value: 16.61 },
   { label: "+ disable_metrics=referenced_memory,percpu", value: 17.77 },
 ];
@@ -45,8 +45,8 @@ Every run put docker-exporter and several cAdvisor v0.60.6 containers on the sam
 
 The configurations:
 
-- **defaults**: cAdvisor's own housekeeping, every 1 s with dynamic back-off;
-- **15 s housekeeping**: `--housekeeping_interval=15s`, the usual tuning advice;
+- **defaults**: cAdvisor refreshes its cgroup data every 1 s, backing off when nothing changes;
+- **tuned (15 s interval)**: `--housekeeping_interval=15s`, the usual tuning advice, so cAdvisor refreshes only as often as Prometheus scrapes;
 - two more in [the `--disable_metrics` trap](#the-disable-metrics-trap) below.
 
 ## Quiet host: Raspberry Pi 5
@@ -60,7 +60,7 @@ Raspberry Pi 5, 8 GB, Raspberry Pi kernel 6.18.50, Docker 29.8.1, cgroup v2 with
 | --- | --- | --- | --- | --- |
 | **docker-exporter 1.6.0** | **0.13%** | **4.2 MiB** (6.6) | 98 | 19 KB / 2.08 s |
 | cAdvisor, defaults | 1.72% | 35.6 MiB (36.1) | 1,337 | 1.9 MB / 0.05 s |
-| cAdvisor, 15 s housekeeping | 0.87% | 22.5 MiB (27.4) | 1,322 | 1.9 MB / 0.06 s |
+| cAdvisor, tuned (15 s interval) | 0.87% | 22.5 MiB (27.4) | 1,322 | 1.9 MB / 0.06 s |
 
 ## Busy host: Rock 5B+
 
@@ -73,7 +73,7 @@ Radxa Rock 5B+, 8 cores, 24 GB, vendor kernel 6.1.115, Docker 29.8.0, cgroup v2.
 | --- | --- | --- | --- | --- |
 | **docker-exporter 1.6.0** | **0.67%** | **5.1 MiB** (5.4) | 577 | 107 KB / 2.62 s |
 | cAdvisor, defaults | 20.36% | 428.6 MiB (484.3) | 4,183 | 8.8 MB / 0.32 s |
-| cAdvisor, 15 s housekeeping | 10.53% | 127.9 MiB (155.8) | 4,198 | 8.8 MB / 0.35 s |
+| cAdvisor, tuned (15 s interval) | 10.53% | 127.9 MiB (155.8) | 4,198 | 8.8 MB / 0.35 s |
 
 cAdvisor's cost grows with the number of containers and how busy they are. docker-exporter's stays near flat: from 7 to 41 containers on the host it went from 0.13% to 0.67% of a core, and from 4.2 to 5.1 MiB.
 
@@ -91,13 +91,13 @@ Once the kernel accounts memory, both report the same container working set: see
 
 ## The `--disable_metrics` trap
 
-`--disable_metrics` **replaces** cAdvisor's default list of disabled collectors instead of adding to it. The defaults disable `advtcp`, `cpu_topology`, `cpuset`, `hugetlb`, `memory_numa`, `process`, `referenced_memory`, `resctrl`, `sched`, `tcp` and `udp`. So `--disable_metrics=referenced_memory,percpu`, which reads like a way to trim cAdvisor, switches ten collectors back on. Measured on the busy host, each run on top of 15 s housekeeping:
+`--disable_metrics` **replaces** cAdvisor's default list of disabled collectors instead of adding to it. The defaults disable `advtcp`, `cpu_topology`, `cpuset`, `hugetlb`, `memory_numa`, `process`, `referenced_memory`, `resctrl`, `sched`, `tcp` and `udp`. So `--disable_metrics=referenced_memory,percpu`, which reads like a way to trim cAdvisor, switches ten collectors back on. Measured on the busy host, each run on top of the tuned configuration:
 
 <FootprintChart title="cAdvisor CPU on the Rock 5B+, share of one core" unit="%" :digits="2" :rows="trap" />
 
 | cAdvisor configuration | CPU | Series | Payload per scrape |
 | --- | --- | --- | --- |
-| 15 s housekeeping | 10.53% | 4,198 | 8.8 MB |
+| tuned (15 s interval) | 10.53% | 4,198 | 8.8 MB |
 | + only the socket collectors (`tcp`, `udp`, `advtcp`) re-enabled | 16.61% | 9,646 | 21.4 MB |
 | + `--disable_metrics=referenced_memory,percpu` | 17.77% | 10,552 | 23.5 MB |
 
@@ -113,7 +113,7 @@ docker-exporter on 9 hosts running up to 36 containers used 2.0 to 10.3 MiB and 
 
 ## Why the CPU gap is structural
 
-The common cAdvisor tuning, `--docker_only=true` with a longer `--housekeeping_interval`, halves its CPU but doesn't remove it: the 15 s rows above use both. Even with `docker_only`, cAdvisor keeps its housekeeping loop over the host's cgroups running, by design. Its own README pitches running "a single cAdvisor to monitor the whole machine". Users have long reported this CPU cost, as in [#2523](https://github.com/google/cadvisor/issues/2523) and [#1897](https://github.com/google/cadvisor/issues/1897).
+The common cAdvisor tuning, `--docker_only=true` with a longer `--housekeeping_interval`, halves its CPU but doesn't remove it: the tuned rows above use both. Even with `docker_only`, cAdvisor keeps its housekeeping loop over the host's cgroups running, by design. Its own README pitches running "a single cAdvisor to monitor the whole machine". Users have long reported this CPU cost, as in [#2523](https://github.com/google/cadvisor/issues/2523) and [#1897](https://github.com/google/cadvisor/issues/1897).
 
 docker-exporter has no such floor because it does no host introspection. It has **no background loop**: work happens only during a scrape, and each scrape calls the Docker stats API. Between scrapes, CPU is idle. [Architecture →](/guide/architecture)
 
