@@ -6,7 +6,7 @@ description: Docker container metrics for Prometheus on ARM64 & cgroup v2 (Raspb
 hero:
   name: docker-exporter
   text: Lightweight Docker metrics for ARM64 & cgroup v2
-  tagline: A tiny Rust Prometheus exporter for Docker containers — about 7 MiB of RAM, a tenth of cAdvisor's CPU on a Raspberry Pi 5, no privileged mode.
+  tagline: A tiny Rust Prometheus exporter for Docker containers — about 7 MiB of RAM, 7 to 13 times less CPU than cAdvisor on a Raspberry Pi 5, no privileged mode.
   image:
     src: /logo.svg
     alt: docker-exporter
@@ -64,7 +64,7 @@ Then scrape `http://localhost:9713/metrics`. Full walkthrough in the [installati
 
 ## Why it exists
 
-cAdvisor watches the whole host. It runs privileged with five host mounts and keeps walking the cgroup tree on a timer, whether anyone scrapes it or not. On a Raspberry Pi 5 it used ten times docker-exporter's CPU to report the same four containers ([benchmark →](/why/benchmark)).
+cAdvisor watches the whole host. It runs privileged with five host mounts and keeps walking the cgroup tree on a timer, whether anyone scrapes it or not. On a Raspberry Pi 5 it used 7 to 13 times docker-exporter's CPU to report the same seven containers ([benchmark →](/why/benchmark)).
 
 `docker-exporter` does one job. It reads the Docker stats API when Prometheus scrapes, computes the working set the way `docker stats` does on both cgroup versions, talks to the socket read-only and runs [non-root](/guide/security).
 
@@ -75,8 +75,8 @@ Memory reading zero on a Pi? That's the boot configuration, and it hits every to
 | Dimension | docker-exporter | cAdvisor |
 | --- | --- | --- |
 | Image size (arm64) | **10.3 MB** (3.4 MB to pull) | 63.7 MB (27.7 MB to pull) |
-| RAM (same Pi 5, 4 containers) | **7.4 MiB** | 19–29 MiB |
-| CPU (same Pi 5, share of one core) | **0.10%** | 1.07% |
+| RAM (same Pi 5, 7 containers) | **4.2 MiB** | 22.5–35.6 MiB |
+| CPU (same Pi 5, share of one core) | **0.13%** | 0.87–1.72% |
 | Privileged container | **No** (socket read-only) | Yes |
 | Scope | Docker containers | Containers + host + processes + hardware |
 

@@ -57,7 +57,7 @@ One more trap from the same thread: a dashboard that sums memory over every cAdv
 
 ## Where docker-exporter fits
 
-It doesn't fix a zero: nothing can until the kernel accounts memory. Once it does, docker-exporter and cAdvisor report the same working set. What docker-exporter changes is the cost of getting it. On the same Pi 5 it used about a tenth of cAdvisor's CPU and less than half its memory, and it needs no privileged mode, only the Docker socket, read-only ([benchmark →](/why/benchmark)).
+It doesn't fix a zero: nothing can until the kernel accounts memory. Once it does, docker-exporter and cAdvisor report the same working set. What docker-exporter changes is the cost of getting it. On the same Pi 5 it used 7 to 13 times less CPU than cAdvisor and 5 to 8 times less memory, and it needs no privileged mode, only the Docker socket, read-only ([benchmark →](/why/benchmark)).
 
 ```bash
 docker run -d \

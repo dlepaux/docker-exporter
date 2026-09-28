@@ -8,7 +8,7 @@ A tiny **Prometheus exporter for Docker container metrics**, written in Rust for
 
 📖 **Full documentation: [docker-exporter.tech](https://docker-exporter.tech)**
 
-`docker-exporter` reads the Docker stats API when Prometheus scrapes, instead of walking the host's cgroups on a timer. It computes the working set the way `docker stats` does on both cgroup versions, talks to the socket **read-only** and runs **non-root**. On the same Raspberry Pi 5 it used about a tenth of cAdvisor's CPU and less than half its memory for the same container numbers ([benchmark](https://docker-exporter.tech/why/benchmark)). Metric names are cAdvisor-compatible, so most existing Grafana dashboards work unchanged.
+`docker-exporter` reads the Docker stats API when Prometheus scrapes, instead of walking the host's cgroups on a timer. It computes the working set the way `docker stats` does on both cgroup versions, talks to the socket **read-only** and runs **non-root**. On the same Raspberry Pi 5 it used 7 to 13 times less CPU than cAdvisor and 5 to 8 times less memory for the same container numbers ([benchmark](https://docker-exporter.tech/why/benchmark)). Metric names are cAdvisor-compatible, so most existing Grafana dashboards work unchanged.
 
 Memory reading zero on a Raspberry Pi? That's the Pi's boot configuration, and it affects every tool, cAdvisor and this one alike: [one kernel flag fixes it](https://docker-exporter.tech/why/cadvisor-arm64-zero-memory).
 

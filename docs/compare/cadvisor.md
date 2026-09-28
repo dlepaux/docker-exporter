@@ -18,8 +18,8 @@ head:
 | --- | --- | --- | --- |
 | Scope | Docker containers only | Containers + host + processes + hardware | Match the tool to what you actually graph. |
 | Image size (arm64) | **10.3 MB** (3.4 MB to pull) | 63.7 MB (27.7 MB to pull) | Pull time and disk on an SBC. |
-| RAM (same Pi 5, 4 containers) | **7.4 MiB** | 19–29 MiB | Headroom on a small host. |
-| CPU (same Pi 5, share of one core) | **0.10%** | 1.07%, and 9–17% on the project's busier hosts | A constant tax vs. near-zero between scrapes. |
+| RAM (same Pi 5, 7 containers) | **4.2 MiB** | 22.5–35.6 MiB | Headroom on a small host. |
+| CPU (same Pi 5, share of one core) | **0.13%** | 0.87–1.72% | A constant tax vs. near-zero between scrapes. |
 | Privileged mode | **No** (socket read-only) | Yes | Blast radius and host-hardening posture. |
 | Host access | the Docker socket, `:ro` | 5 bind mounts (rootfs, /var/run, /sys, /var/lib/docker, /dev/disk) plus /dev/kmsg | Setup complexity and attack surface. |
 | Metric names | cAdvisor-compatible | — | Most container dashboards swap unchanged: core runtime metrics share cAdvisor names. A few differ, such as memory limit and health, which is `container_health_status` with a `status` label where cAdvisor has `container_health_state`. |
@@ -27,7 +27,7 @@ head:
 
 ## Which should I pick for a Raspberry Pi / homelab?
 
-- **Homelab / Raspberry Pi / SBC cluster, already on Prometheus + Grafana** → **docker-exporter**. The same container memory numbers, a tenth of the CPU, no privileged mode.
+- **Homelab / Raspberry Pi / SBC cluster, already on Prometheus + Grafana** → **docker-exporter**. The same container memory numbers, 7 to 13 times less CPU, no privileged mode.
 - **You need host + per-process + OOM + hardware metrics** → **cAdvisor** (or run both: docker-exporter for container metrics, cAdvisor scoped to the host metrics you actually use).
 - **No Prometheus stack yet, want an all-in-one dashboard** → neither is ideal; look at a monitoring hub like Beszel or Netdata. docker-exporter assumes you already scrape Prometheus.
 
