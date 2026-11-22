@@ -14,12 +14,7 @@
 # against this version of `time`. Upstream fix lands when `cookie` bumps
 # past 0.18.1 and axum-test follows; until then the impact on production
 # users is zero. Re-verify on each axum-test release.
-#
-# RUSTSEC-2026-0097 — `rand 0.9.2` unsound when a custom logger calls
-# `rand::rng()`. Reaches us only via axum-test → rust-multipart-rfc7578_2
-# → rand. Same scoping argument as above: dev-dependency, never reaches
-# the released artefact.
-ignore = ["RUSTSEC-2026-0009", "RUSTSEC-2026-0097"]
+ignore = ["RUSTSEC-2026-0009"]
 
 [licenses]
 allow = [
